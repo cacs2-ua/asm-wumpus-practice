@@ -1,0 +1,500 @@
+/**
+ * Name: Practice 1 Wumpus - Environment + Tests
+ * Author: Based on template by Raúl Fraile
+ */
+
+model Wumpus_template
+
+global {
+
+    // ---------- PARAMETERS FOR THE ENVIRONMENT ----------
+
+    int grid_width  <- 10;     // can be changed from the experiment
+    int grid_height <- 10;
+
+    int nb_gold <- 2;          // number of treasures (only used in random maps)
+    int nb_pits <- 5;          // number of pits     (only used in random maps)
+
+    bool use_random_map <- true;   // false = use the predefined example map
+
+    // ---------- BOOKKEEPING FOR TESTS ----------
+
+    bool tests_executed <- false;
+    int  tests_failed   <- 0;
+
+    // ---------- INITIALIZATION ----------
+
+    init {
+        do setup_world;
+        do run_environment_unit_tests;   // run tests automatically on each reset
+    }
+
+    // Create / reset the whole environment (grid contents & percept flags)
+    action setup_world {
+
+        // 1) Reset per-cell attributes in the grid
+        ask gworld {
+            has_pit     <- false;
+            has_wumpus  <- false;
+            has_gold    <- false;
+
+            breeze <- false;
+            stench <- false;
+            glow   <- false;
+        }
+
+        // 2) Remove any previous environment objects (useful on reset)
+		ask goldArea    { do die; }
+		ask glitterArea { do die; }
+		ask wumpusArea  { do die; }
+		ask odorArea    { do die; }
+		ask pitArea     { do die; }
+		ask breezeArea  { do die; }
+
+        // 3) Build either a random map or a fixed test map
+        if use_random_map {
+            do setup_random_map;
+        } else {
+            do setup_predefined_map;
+        }
+    }
+
+    // ---------- RANDOM MAP ----------
+
+    action setup_random_map {
+
+        // One Wumpus
+        create wumpusArea number: 1;
+
+        // Some treasures
+        create goldArea number: nb_gold;
+
+        // Pits
+        create pitArea number: nb_pits;
+    }
+
+    // ---------- PREDEFINED TEST MAP (SMALL EXAMPLE) ----------
+    // You can change the coordinates later if you want.
+
+    action setup_predefined_map {
+
+        // The predefined map assumes grid_width, grid_height >= 5
+
+        // 1) Wumpus at (3,3)
+		create wumpusArea number: 1 {
+		    gworld place <- first(gworld where (location.x = 3 and location.y = 3));
+		    location <- place.location;
+		    ask world { do initialize_wumpus_percepts(place); }
+		}
+
+
+        // 2) One treasure at (1,4)
+		create goldArea number: 1 {
+		    gworld place <- first(gworld where (location.x = 1 and location.y = 4));
+		    location <- place.location;
+		    ask world { do initialize_gold_percepts(place); }
+		}
+
+        // 3) Two pits at (0,2) and (4,1)
+		create pitArea number: 1 {
+		    gworld place <- first(gworld where (location.x = 0 and location.y = 2));
+		    location <- place.location;
+		    ask world { do initialize_pit_percepts(place); }
+		}
+
+		create pitArea number: 1 {
+		    gworld place <- first(gworld where (location.x = 4 and location.y = 1));
+		    location <- place.location;
+		    ask world { do initialize_pit_percepts(place); }
+		}
+
+    }
+
+    // ---------- HELPERS: UPDATE CELL CONTENT & PERCEPTS ----------
+
+    action initialize_wumpus_percepts (gworld place) {
+        // Mark the cell as containing the Wumpus
+        ask place { has_wumpus <- true; }
+
+        // Neighbor cells receive stench
+        list<gworld> my_neighbors <- [];
+        ask place {
+            my_neighbors <- neighbors;
+        }
+
+        loop c over: my_neighbors {
+            ask c { stench <- true; }
+        }
+    }
+
+    action initialize_gold_percepts (gworld place) {
+        ask place { has_gold <- true; }
+
+        list<gworld> my_neighbors <- [];
+        ask place {
+            my_neighbors <- neighbors;
+        }
+
+        loop c over: my_neighbors {
+            ask c { glow <- true; }
+        }
+    }
+
+    action initialize_pit_percepts (gworld place) {
+        ask place { has_pit <- true; }
+
+        list<gworld> my_neighbors <- [];
+        ask place {
+            my_neighbors <- neighbors;
+        }
+
+        loop c over: my_neighbors {
+            ask c { breeze <- true; }
+        }
+    }
+
+    // ============================================================
+    //                  ENVIRONMENT "UNIT TESTS"
+    // ============================================================
+
+    action run_environment_unit_tests {
+
+        tests_executed <- true;
+        tests_failed   <- 0;
+
+        write "============================";
+        write "Running Wumpus environment unit tests...";
+
+        do test_single_wumpus;
+        do test_at_least_one_gold;
+        do test_expected_number_of_pits;
+        do test_breeze_consistency;
+        do test_stench_consistency;
+        do test_glow_consistency;
+
+        if (tests_failed = 0) {
+            write "All environment tests PASSED";
+        } else {
+            write "Environment tests FAILED. Number of failed tests: " + tests_failed;
+        }
+        write "============================";
+    }
+
+    // ---------- INDIVIDUAL TESTS ----------
+
+    // 1) Exactly one Wumpus
+    action test_single_wumpus {
+        int n <- length(wumpusArea);
+        if (n = 1) {
+            write "Test 1 (single Wumpus): OK";
+        } else {
+            write "Test 1 (single Wumpus): FAILED - expected 1, found " + n;
+            tests_failed <- tests_failed + 1;
+        }
+    }
+
+    // 2) At least one gold area
+    action test_at_least_one_gold {
+        int n <- length(goldArea);
+        if (n > 0) {
+            write "Test 2 (at least one gold): OK";
+        } else {
+            write "Test 2 (at least one gold): FAILED - no gold areas created";
+            tests_failed <- tests_failed + 1;
+        }
+    }
+
+    // 3) In random maps, the number of pits must match nb_pits
+    action test_expected_number_of_pits {
+        int n <- length(pitArea);
+        if (use_random_map and n = nb_pits) {
+            write "Test 3 (expected number of pits): OK";
+        } else if (use_random_map and n != nb_pits) {
+            write "Test 3 (expected number of pits): FAILED - expected "
+                  + nb_pits + ", found " + n;
+            tests_failed <- tests_failed + 1;
+        } else {
+            // In predefined maps we don't enforce nb_pits
+            write "Test 3 (expected number of pits): SKIPPED for predefined map";
+        }
+    }
+
+    // 4) For each cell: breeze == true  <=> at least one neighbour has a pit
+    action test_breeze_consistency {
+        bool ok <- true;
+
+        ask gworld {
+            bool expected_breeze <- length(neighbors where (each.has_pit)) > 0;
+            if (breeze != expected_breeze) {
+                ok <- false;
+            }
+        }
+
+        if ok {
+            write "Test 4 (breeze consistency): OK";
+        } else {
+            write "Test 4 (breeze consistency): FAILED";
+            tests_failed <- tests_failed + 1;
+        }
+    }
+
+    // 5) For each cell: stench == true <=> at least one neighbour has the Wumpus
+    action test_stench_consistency {
+        bool ok <- true;
+
+        ask gworld {
+            bool expected_stench <- length(neighbors where (each.has_wumpus)) > 0;
+            if (stench != expected_stench) {
+                ok <- false;
+            }
+        }
+
+        if ok {
+            write "Test 5 (stench consistency): OK";
+        } else {
+            write "Test 5 (stench consistency): FAILED";
+            tests_failed <- tests_failed + 1;
+        }
+    }
+
+    // 6) For each cell: glow == true <=> at least one neighbour has gold
+    action test_glow_consistency {
+        bool ok <- true;
+
+        ask gworld {
+            bool expected_glow <- length(neighbors where (each.has_gold)) > 0;
+            if (glow != expected_glow) {
+                ok <- false;
+            }
+        }
+
+        if ok {
+            write "Test 6 (glow consistency): OK";
+        } else {
+            write "Test 6 (glow consistency): FAILED";
+            tests_failed <- tests_failed + 1;
+        }
+    }
+}
+
+// ============================================================
+//                 GRID: WUMPUS WORLD CELLS
+// ============================================================
+
+grid gworld width: grid_width height: grid_height neighbors: 4 {
+
+    // Content flags (true state of the world)
+    bool has_pit    <- false;
+    bool has_wumpus <- false;
+    bool has_gold   <- false;
+
+    // Percept flags (derived from neighbours)
+    bool breeze <- false;   // pit nearby
+    bool stench <- false;   // Wumpus nearby
+    bool glow   <- false;   // gold nearby
+
+    // Simple colouring: pits > Wumpus > gold > empty grass
+    rgb color <- #green;
+
+    reflex update_color {
+        if has_pit {
+            color <- #black;
+        } else if has_wumpus {
+            color <- #red;
+        } else if has_gold {
+            color <- #yellow;
+        } else {
+            color <- #green;
+        }
+    }
+
+}
+
+// ============================================================
+//                 SPECIES: SMELLS / PERCEPTS
+// ============================================================
+
+species odorArea {
+    aspect base {
+        draw square(4) color: #brown border: #black;
+    }
+}
+
+species glitterArea {
+    aspect base {
+        draw square(4) color: #chartreuse border: #black;
+    }
+}
+
+species breezeArea {
+    aspect base {
+        draw square(4) color: #lightblue border: #black;
+    }
+}
+
+// ============================================================
+//                 SPECIES: WUMPUS, GOLD, PITS
+// ============================================================
+
+species wumpusArea {
+
+    init {
+
+        // RANDOM MAP: no location assigned yet
+		if (location = {0,0,0}) {
+		    // busca una celda libre de pit, wumpus o gold
+		    gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
+		    location <- place.location;
+		    ask world { do initialize_wumpus_percepts(place); }
+		}
+
+        // PREDEFINED MAP: location and percepts are already set
+        // inside setup_predefined_map
+
+        // Always create odor markers around current location for visualization
+        gworld my_cell <- first(gworld where (location = self.location));
+        list<gworld> my_neighbors <- [];
+        ask my_cell {
+            my_neighbors <- neighbors;
+        }
+
+        loop c over: my_neighbors {
+            create odorArea {
+                location <- c.location;
+            }
+        }
+    }
+
+    // Default aspect (used if you keep colours)
+    aspect base {
+        draw square(4) color: #red border: #black;
+    }
+
+    // OPTIONAL: image aspect. Put "wumpus.png" under project folder "images"
+    // and use aspect: image in the experiment to visualize it.
+    aspect image {
+        draw image("images/wumpus.png") size: {4,4};
+    }
+}
+
+species goldArea {
+
+    init {
+
+        // RANDOM MAP
+		if (location = {0,0,0}) {
+		    gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
+		    location <- place.location;
+		    ask world { do initialize_gold_percepts(place); }
+		}
+
+        // PREDEFINED MAP: handled in setup_predefined_map
+
+        // Always create glitter markers around current location
+        gworld my_cell <- first(gworld where (location = self.location));
+        list<gworld> my_neighbors <- [];
+        ask my_cell {
+            my_neighbors <- neighbors;
+        }
+
+        loop c over: my_neighbors {
+            create glitterArea {
+                location <- c.location;
+            }
+        }
+    }
+
+    aspect base {
+        draw square(4) color: #yellow border: #black;
+    }
+}
+
+species pitArea {
+
+    init {
+
+        // RANDOM MAP
+		if (location = {0,0,0}) {
+		    gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
+		    location <- place.location;
+		    ask world { do initialize_pit_percepts(place); }
+		}
+
+        // PREDEFINED MAP: handled in setup_predefined_map
+
+        // Always create breeze markers around current location
+        gworld my_cell <- first(gworld where (location = self.location));
+        list<gworld> my_neighbors <- [];
+        ask my_cell {
+            my_neighbors <- neighbors;
+        }
+
+        loop c over: my_neighbors {
+            create breezeArea {
+                location <- c.location;
+            }
+        }
+    }
+
+    aspect base {
+        draw square(4) color: #black border: #white;
+    }
+}
+
+// ============================================================
+//                 EXPERIMENTS
+// ============================================================
+
+experiment Wumpus_experiment_1 type: gui {
+
+    // Parameters visible in the GUI
+    parameter "Grid width"  var: grid_width  min: 4 max: 50 step: 1;
+    parameter "Grid height" var: grid_height min: 4 max: 50 step: 1;
+
+    parameter "Number of pits (random map)" var: nb_pits min: 0 max: 50 step: 1;
+    parameter "Number of gold areas"        var: nb_gold min: 0 max: 10 step: 1;
+
+    parameter "Use random map (otherwise predefined example)"
+        var: use_random_map;
+
+    output {
+        display view1 {
+            grid gworld border: #darkgreen;
+
+            species pitArea     aspect: base;
+            species breezeArea  aspect: base;
+
+            species wumpusArea  aspect: base;   // change to aspect: image if using PNG
+            species odorArea    aspect: base;
+
+            species goldArea    aspect: base;
+            species glitterArea aspect: base;
+        }
+
+        monitor "Tests executed"          value: tests_executed;
+        monitor "Number of failed tests"  value: tests_failed;
+    }
+}
+
+// Optional dedicated experiment that just reuses the same tests
+experiment Wumpus_environment_tests type: gui {
+
+    parameter "Use random map (otherwise predefined example)"
+        var: use_random_map;
+
+    output {
+        display tests_view {
+            grid gworld border: #gray;
+
+            species pitArea     aspect: base;
+            species breezeArea  aspect: base;
+            species wumpusArea  aspect: base;
+            species odorArea    aspect: base;
+            species goldArea    aspect: base;
+            species glitterArea aspect: base;
+        }
+
+        monitor "Tests executed"          value: tests_executed;
+        monitor "Number of failed tests"  value: tests_failed;
+    }
+}
