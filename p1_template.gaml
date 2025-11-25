@@ -13,7 +13,7 @@ global {
     int grid_height <- 10;
 
     int nb_gold <- 6;          // number of treasures (only used in random maps)
-    int nb_pits <- 11;          // number of pits     (only used in random maps)
+    int nb_pits <- 8;          // number of pits     (only used in random maps)
 
     bool use_random_map <- true;   // false = use the predefined example map
 
@@ -71,7 +71,6 @@ action setup_random_map {
         return;
     }
 
-    // Keep track of already used cells to avoid overlaps
     list<gworld> used <- [];
 
     // --------- Wumpus ----------
@@ -83,25 +82,30 @@ action setup_random_map {
     do initialize_wumpus_percepts(wcell);
 
     // --------- Gold ----------
-    loop i from: 1 to: nb_gold {
-        gworld gcell <- one_of(gworld where !(each in used));
-        if (gcell = nil) { write "ERROR: Cannot pick a cell for Gold."; return; }
-        used <- used + [gcell];
+    if (nb_gold > 0) {
+        loop i from: 1 to: nb_gold {
+            gworld gcell <- one_of(gworld where !(each in used));
+            if (gcell = nil) { write "ERROR: Cannot pick a cell for Gold."; return; }
+            used <- used + [gcell];
 
-        create goldArea number: 1 { location <- gcell.location; }
-        do initialize_gold_percepts(gcell);
+            create goldArea number: 1 { location <- gcell.location; }
+            do initialize_gold_percepts(gcell);
+        }
     }
 
     // --------- Pits ----------
-    loop i from: 1 to: nb_pits {
-        gworld pcell <- one_of(gworld where !(each in used));
-        if (pcell = nil) { write "ERROR: Cannot pick a cell for Pit."; return; }
-        used <- used + [pcell];
+    if (nb_pits > 0) {
+        loop i from: 1 to: nb_pits {
+            gworld pcell <- one_of(gworld where !(each in used));
+            if (pcell = nil) { write "ERROR: Cannot pick a cell for Pit."; return; }
+            used <- used + [pcell];
 
-        create pitArea number: 1 { location <- pcell.location; }
-        do initialize_pit_percepts(pcell);
+            create pitArea number: 1 { location <- pcell.location; }
+            do initialize_pit_percepts(pcell);
+        }
     }
 }
+
 
 
 
@@ -236,15 +240,27 @@ action setup_random_map {
     }
 
     // 2) At least one gold area
-    action test_at_least_one_gold {
-        int n <- length(goldArea);
-        if (n > 0) {
-            write "Test 2 (at least one gold): OK";
-        } else {
-            write "Test 2 (at least one gold): FAILED - no gold areas created";
-            tests_failed <- tests_failed + 1;
-        }
-    }
+	action test_at_least_one_gold {
+	    int n <- length(goldArea);
+	
+	    if (use_random_map) {
+	        if (n = nb_gold) {
+	            write "Test 2 (gold count matches nb_gold): OK";
+	        } else {
+	            write "Test 2 (gold count matches nb_gold): FAILED - expected " + nb_gold + ", found " + n;
+	            tests_failed <- tests_failed + 1;
+	        }
+	    } else {
+	        // Predefined map may force gold regardless of nb_gold
+	        if (n > 0) {
+	            write "Test 2 (at least one gold): OK";
+	        } else {
+	            write "Test 2 (at least one gold): FAILED - no gold areas created";
+	            tests_failed <- tests_failed + 1;
+	        }
+	    }
+	}
+
 
     // 3) In random maps, the number of pits must match nb_pits
     action test_expected_number_of_pits {
