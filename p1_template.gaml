@@ -19,7 +19,7 @@ global {
 
     // ---------- BOOKKEEPING FOR TESTS ----------
 
-    bool tests_executed <- false;
+    bool tests_executed <- true;
     int  tests_failed   <- 0;
 
     // ---------- INITIALIZATION ----------
@@ -76,39 +76,47 @@ global {
     // ---------- PREDEFINED TEST MAP (SMALL EXAMPLE) ----------
     // You can change the coordinates later if you want.
 
-    action setup_predefined_map {
+	action setup_predefined_map {
+	
+	    // Predefined coordinates require at least 5x5
+	    if (grid_width < 5 or grid_height < 5) {
+	        write "Predefined map requires grid_width and grid_height >= 5. Increase grid size or use random map.";
+	        return;
+	    }
+	
+	    // 1) Wumpus at (3,3)
+	    create wumpusArea number: 1 {
+	        gworld place <- gworld grid_at {3, 3};
+	        if (place = nil) { write "ERROR: gworld cell [3,3] not found."; do die; }
+	        location <- place.location;
+	        ask world { do initialize_wumpus_percepts(place); }
+	    }
+	
+	    // 2) Gold at (1,4)
+	    create goldArea number: 1 {
+	        gworld place <- gworld grid_at {1, 4};
+	        if (place = nil) { write "ERROR: gworld cell [1,4] not found."; do die; }
+	        location <- place.location;
+	        ask world { do initialize_gold_percepts(place); }
+	    }
+	
+	    // 3) Pits at (0,2) and (4,1)
+	    create pitArea number: 1 {
+	        gworld place <- gworld grid_at {0, 2};
+	        if (place = nil) { write "ERROR: gworld cell [0,2] not found."; do die; }
+	        location <- place.location;
+	        ask world { do initialize_pit_percepts(place); }
+	    }
+	
+	    create pitArea number: 1 {
+	        gworld place <- gworld grid_at {4, 1};
+	        if (place = nil) { write "ERROR: gworld cell [4,1] not found."; do die; }
+	        location <- place.location;
+	        ask world { do initialize_pit_percepts(place); }
+	    }
+	}
 
-        // The predefined map assumes grid_width, grid_height >= 5
 
-        // 1) Wumpus at (3,3)
-		create wumpusArea number: 1 {
-		    gworld place <- first(gworld where (location.x = 3 and location.y = 3));
-		    location <- place.location;
-		    ask world { do initialize_wumpus_percepts(place); }
-		}
-
-
-        // 2) One treasure at (1,4)
-		create goldArea number: 1 {
-		    gworld place <- first(gworld where (location.x = 1 and location.y = 4));
-		    location <- place.location;
-		    ask world { do initialize_gold_percepts(place); }
-		}
-
-        // 3) Two pits at (0,2) and (4,1)
-		create pitArea number: 1 {
-		    gworld place <- first(gworld where (location.x = 0 and location.y = 2));
-		    location <- place.location;
-		    ask world { do initialize_pit_percepts(place); }
-		}
-
-		create pitArea number: 1 {
-		    gworld place <- first(gworld where (location.x = 4 and location.y = 1));
-		    location <- place.location;
-		    ask world { do initialize_pit_percepts(place); }
-		}
-
-    }
 
     // ---------- HELPERS: UPDATE CELL CONTENT & PERCEPTS ----------
 
