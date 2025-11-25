@@ -12,8 +12,8 @@ global {
     int grid_width  <- 10;     // can be changed from the experiment
     int grid_height <- 10;
 
-    int nb_gold <- 2;          // number of treasures (only used in random maps)
-    int nb_pits <- 5;          // number of pits     (only used in random maps)
+    int nb_gold <- 6;          // number of treasures (only used in random maps)
+    int nb_pits <- 11;          // number of pits     (only used in random maps)
 
     bool use_random_map <- true;   // false = use the predefined example map
 
@@ -61,17 +61,50 @@ global {
 
     // ---------- RANDOM MAP ----------
 
-    action setup_random_map {
+action setup_random_map {
 
-        // One Wumpus
-        create wumpusArea number: 1;
+    int needed <- 1 + nb_gold + nb_pits;
+    int capacity <- grid_width * grid_height;
 
-        // Some treasures
-        create goldArea number: nb_gold;
-
-        // Pits
-        create pitArea number: nb_pits;
+    if (needed > capacity) {
+        write "ERROR: Not enough cells for 1 Wumpus + nb_gold + nb_pits. Increase grid or reduce numbers.";
+        return;
     }
+
+    // Keep track of already used cells to avoid overlaps
+    list<gworld> used <- [];
+
+    // --------- Wumpus ----------
+    gworld wcell <- one_of(gworld where !(each in used));
+    if (wcell = nil) { write "ERROR: Cannot pick a cell for Wumpus."; return; }
+    used <- used + [wcell];
+
+    create wumpusArea number: 1 { location <- wcell.location; }
+    do initialize_wumpus_percepts(wcell);
+
+    // --------- Gold ----------
+    loop i from: 1 to: nb_gold {
+        gworld gcell <- one_of(gworld where !(each in used));
+        if (gcell = nil) { write "ERROR: Cannot pick a cell for Gold."; return; }
+        used <- used + [gcell];
+
+        create goldArea number: 1 { location <- gcell.location; }
+        do initialize_gold_percepts(gcell);
+    }
+
+    // --------- Pits ----------
+    loop i from: 1 to: nb_pits {
+        gworld pcell <- one_of(gworld where !(each in used));
+        if (pcell = nil) { write "ERROR: Cannot pick a cell for Pit."; return; }
+        used <- used + [pcell];
+
+        create pitArea number: 1 { location <- pcell.location; }
+        do initialize_pit_percepts(pcell);
+    }
+}
+
+
+
 
     // ---------- PREDEFINED TEST MAP (SMALL EXAMPLE) ----------
     // You can change the coordinates later if you want.
@@ -347,57 +380,37 @@ species breezeArea {
 
 species wumpusArea {
 
-	init {
-	    if use_random_map {
-	        gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
-	        location <- place.location;
-	        ask world { do initialize_wumpus_percepts(place); }
-	    }
-	}
+    init { }   // placement is done in setup_random_map / setup_predefined_map
 
-
-    // Default aspect (used if you keep colours)
     aspect base {
         draw square(4) color: #red border: #black;
     }
 
-    // OPTIONAL: image aspect. Put "wumpus.png" under project folder "images"
-    // and use aspect: image in the experiment to visualize it.
     aspect image {
         draw image("images/wumpus.png") size: {4,4};
     }
 }
 
+
 species goldArea {
 
-	init {
-	    if use_random_map {
-	        gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
-	        location <- place.location;
-	        ask world { do initialize_gold_percepts(place); }
-	    }
-	}
-
+    init { }   // placement is done in setup_random_map / setup_predefined_map
 
     aspect base {
         draw square(4) color: #yellow border: #black;
     }
 }
 
+
 species pitArea {
 
-	init {
-	    if use_random_map {
-	        gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
-	        location <- place.location;
-	        ask world { do initialize_pit_percepts(place); }
-	    }
-	}
+    init { }   // placement is done in setup_random_map / setup_predefined_map
 
     aspect base {
         draw square(4) color: #black border: #white;
     }
 }
+
 
 // ============================================================
 //                 EXPERIMENTS
@@ -416,18 +429,20 @@ experiment Wumpus_experiment_1 type: gui {
         var: use_random_map;
 
     output {
-        display view1 {
-            grid gworld border: #darkgreen;
+		display view1 {
+		    grid gworld border: #darkgreen;
+		
+		    // draw percept markers FIRST (background)
+		    species breezeArea  aspect: base;
+		    species odorArea    aspect: base;
+		    species glitterArea aspect: base;
+		
+		    // draw objects AFTER (foreground)
+		    species pitArea     aspect: base;
+		    species wumpusArea  aspect: base;
+		    species goldArea    aspect: base;
+		}
 
-            species pitArea     aspect: base;
-            species breezeArea  aspect: base;
-
-            species wumpusArea  aspect: base;   // change to aspect: image if using PNG
-            species odorArea    aspect: base;
-
-            species goldArea    aspect: base;
-            species glitterArea aspect: base;
-        }
 
         monitor "Tests executed"          value: tests_executed;
         monitor "Number of failed tests"  value: tests_failed;
@@ -441,16 +456,18 @@ experiment Wumpus_environment_tests type: gui {
         var: use_random_map;
 
     output {
-        display tests_view {
-            grid gworld border: #gray;
+		display tests_view {
+		    grid gworld border: #gray;
+		
+		    species breezeArea  aspect: base;
+		    species odorArea    aspect: base;
+		    species glitterArea aspect: base;
+		
+		    species pitArea     aspect: base;
+		    species wumpusArea  aspect: base;
+		    species goldArea    aspect: base;
+		}
 
-            species pitArea     aspect: base;
-            species breezeArea  aspect: base;
-            species wumpusArea  aspect: base;
-            species odorArea    aspect: base;
-            species goldArea    aspect: base;
-            species glitterArea aspect: base;
-        }
 
         monitor "Tests executed"          value: tests_executed;
         monitor "Number of failed tests"  value: tests_failed;
