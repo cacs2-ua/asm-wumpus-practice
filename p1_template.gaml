@@ -112,46 +112,47 @@ global {
 
     // ---------- HELPERS: UPDATE CELL CONTENT & PERCEPTS ----------
 
-    action initialize_wumpus_percepts (gworld place) {
-        // Mark the cell as containing the Wumpus
-        ask place { has_wumpus <- true; }
+	action initialize_wumpus_percepts (gworld place) {
+	
+	    ask place { has_wumpus <- true; }
+	
+	    list<gworld> my_neighbors <- [];
+	    ask place { my_neighbors <- neighbors; }
+	
+	    loop c over: my_neighbors {
+	        ask c { stench <- true; }
+	        create odorArea { location <- c.location; }
+	    }
+	}
 
-        // Neighbor cells receive stench
-        list<gworld> my_neighbors <- [];
-        ask place {
-            my_neighbors <- neighbors;
-        }
 
-        loop c over: my_neighbors {
-            ask c { stench <- true; }
-        }
-    }
+	action initialize_gold_percepts (gworld place) {
+	
+	    ask place { has_gold <- true; }
+	
+	    list<gworld> my_neighbors <- [];
+	    ask place { my_neighbors <- neighbors; }
+	
+	    loop c over: my_neighbors {
+	        ask c { glow <- true; }
+	        create glitterArea { location <- c.location; }
+	    }
+	}
 
-    action initialize_gold_percepts (gworld place) {
-        ask place { has_gold <- true; }
 
-        list<gworld> my_neighbors <- [];
-        ask place {
-            my_neighbors <- neighbors;
-        }
+	action initialize_pit_percepts (gworld place) {
+	
+	    ask place { has_pit <- true; }
+	
+	    list<gworld> my_neighbors <- [];
+	    ask place { my_neighbors <- neighbors; }
+	
+	    loop c over: my_neighbors {
+	        ask c { breeze <- true; }
+	        create breezeArea { location <- c.location; }
+	    }
+	}
 
-        loop c over: my_neighbors {
-            ask c { glow <- true; }
-        }
-    }
-
-    action initialize_pit_percepts (gworld place) {
-        ask place { has_pit <- true; }
-
-        list<gworld> my_neighbors <- [];
-        ask place {
-            my_neighbors <- neighbors;
-        }
-
-        loop c over: my_neighbors {
-            ask c { breeze <- true; }
-        }
-    }
 
     // ============================================================
     //                  ENVIRONMENT "UNIT TESTS"
@@ -338,32 +339,14 @@ species breezeArea {
 
 species wumpusArea {
 
-    init {
+	init {
+	    if use_random_map {
+	        gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
+	        location <- place.location;
+	        ask world { do initialize_wumpus_percepts(place); }
+	    }
+	}
 
-        // RANDOM MAP: no location assigned yet
-		if (location = {0,0,0}) {
-		    // busca una celda libre de pit, wumpus o gold
-		    gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
-		    location <- place.location;
-		    ask world { do initialize_wumpus_percepts(place); }
-		}
-
-        // PREDEFINED MAP: location and percepts are already set
-        // inside setup_predefined_map
-
-        // Always create odor markers around current location for visualization
-        gworld my_cell <- first(gworld where (location = self.location));
-        list<gworld> my_neighbors <- [];
-        ask my_cell {
-            my_neighbors <- neighbors;
-        }
-
-        loop c over: my_neighbors {
-            create odorArea {
-                location <- c.location;
-            }
-        }
-    }
 
     // Default aspect (used if you keep colours)
     aspect base {
@@ -379,30 +362,14 @@ species wumpusArea {
 
 species goldArea {
 
-    init {
+	init {
+	    if use_random_map {
+	        gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
+	        location <- place.location;
+	        ask world { do initialize_gold_percepts(place); }
+	    }
+	}
 
-        // RANDOM MAP
-		if (location = {0,0,0}) {
-		    gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
-		    location <- place.location;
-		    ask world { do initialize_gold_percepts(place); }
-		}
-
-        // PREDEFINED MAP: handled in setup_predefined_map
-
-        // Always create glitter markers around current location
-        gworld my_cell <- first(gworld where (location = self.location));
-        list<gworld> my_neighbors <- [];
-        ask my_cell {
-            my_neighbors <- neighbors;
-        }
-
-        loop c over: my_neighbors {
-            create glitterArea {
-                location <- c.location;
-            }
-        }
-    }
 
     aspect base {
         draw square(4) color: #yellow border: #black;
@@ -411,30 +378,13 @@ species goldArea {
 
 species pitArea {
 
-    init {
-
-        // RANDOM MAP
-		if (location = {0,0,0}) {
-		    gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
-		    location <- place.location;
-		    ask world { do initialize_pit_percepts(place); }
-		}
-
-        // PREDEFINED MAP: handled in setup_predefined_map
-
-        // Always create breeze markers around current location
-        gworld my_cell <- first(gworld where (location = self.location));
-        list<gworld> my_neighbors <- [];
-        ask my_cell {
-            my_neighbors <- neighbors;
-        }
-
-        loop c over: my_neighbors {
-            create breezeArea {
-                location <- c.location;
-            }
-        }
-    }
+	init {
+	    if use_random_map {
+	        gworld place <- one_of(gworld where !(each.has_pit or each.has_wumpus or each.has_gold));
+	        location <- place.location;
+	        ask world { do initialize_pit_percepts(place); }
+	    }
+	}
 
     aspect base {
         draw square(4) color: #black border: #white;
