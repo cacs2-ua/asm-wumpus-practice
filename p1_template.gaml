@@ -1,27 +1,23 @@
 /**
- * Name: Practice 1 Wumpus - Environment + Basic Player + Tests
- * Author: Based on template by Raúl Fraile
+ * Name: Wumpus
+ * Author: Cristian Andrés Córdoba Silvestre
  */
 
 model Wumpus_template
 
 global {
 
-    // ---------- PARAMETERS FOR THE ENVIRONMENT ----------
-
-    int grid_width <- 8;     // can be changed from the experiment
+    int grid_width <- 8;     
     int grid_height <- 8;
 
-    int nb_gold <- 4;          // number of treasures (only used in random maps)
+    int nb_gold <- 1;          // number of treasures (only used in random maps)
     int nb_pits <- 6;          // number of pits     (only used in random maps)
 
     bool use_random_map <- true;   // false = use the predefined example map
 
-    // ---------- PLAYER PARAMETERS (SECTION 5) ----------
 
     bool debug_player <- true;     // set true to print each move to the console
 
-    // ---------- BDI PREDICATES (global symbols) ----------
     string P_WANTS_PATROL       <- "wants_patrol";
     string P_WANTS_COLLECT_GOLD <- "wants_collect_gold";
     string P_WANTS_AVOID_WUMPUS <- "wants_avoid_wumpus";
@@ -30,19 +26,16 @@ global {
     string P_NEAR_GOLD   <- "near_gold";
     string P_NEAR_WUMPUS <- "near_wumpus";
 
-    // Desire-related predicates required by the practice
     predicate wants_patrol       <- new_predicate(P_WANTS_PATROL);
     predicate wants_collect_gold <- new_predicate(P_WANTS_COLLECT_GOLD);
     predicate wants_avoid_wumpus <- new_predicate(P_WANTS_AVOID_WUMPUS);
 
-    // Transient perception predicates (near_x)
     predicate near_pit    <- new_predicate(P_NEAR_PIT);
     predicate near_gold   <- new_predicate(P_NEAR_GOLD);
     predicate near_wumpus <- new_predicate(P_NEAR_WUMPUS);
 	
 
 
-    // ---------- BOOKKEEPING FOR TESTS ----------
 
     bool tests_executed <- false;
     int  tests_failed   <- 0;
@@ -143,17 +136,13 @@ reflex check_end_conditions when: (!tests_running) and (!game_finished) {
     }
 }
 
-    // ---------- INITIALIZATION ----------
 
     init {
         do setup_world;
-        do setup_player;            // <-- Section 5: create + place player
+        do setup_player;            
         do run_unit_tests;          // run tests automatically on each reset
     }
 
-    // ============================================================
-    //                 WORLD BUILD / RESET
-    // ============================================================
 
     // Create / reset the whole environment (grid contents & percept flags)
 	action setup_world {
@@ -190,9 +179,6 @@ reflex check_end_conditions when: (!tests_running) and (!game_finished) {
 	    do reset_end_state;
 	}
 
-    // ============================================================
-    //                 SECTION 5: PLAYER CREATION
-    // ============================================================
 
 action setup_player {
 
@@ -226,11 +212,6 @@ action setup_player {
         write "Player created at location " + start_cell.location;
     }
 }
-
-
-    // ============================================================
-    //                 RANDOM MAP
-    // ============================================================
 
     action setup_random_map {
 
@@ -277,10 +258,6 @@ action setup_player {
         }
     }
 
-    // ============================================================
-    //                 PREDEFINED TEST MAP (SMALL EXAMPLE)
-    // ============================================================
-
     action setup_predefined_map {
 
         // Predefined coordinates require at least 5x5
@@ -320,10 +297,6 @@ action setup_player {
             ask world { do initialize_pit_percepts(place); }
         }
     }
-
-    // ============================================================
-    //                 HELPERS: UPDATE CELL CONTENT & PERCEPTS
-    // ============================================================
 
     action initialize_wumpus_percepts (gworld place) {
 
@@ -393,15 +366,7 @@ action setup_player {
         }
     }
 }
-    
 
-    // ============================================================
-    //                  "UNIT TESTS" (ENVIRONMENT + PLAYER)
-    // ============================================================
-
-	    // ======================================================
-    // UNIT TESTS — SECTION 6 (Beliefs)
-    // ======================================================
     action assert_true (bool cond, string msg) {
         if (!cond) {
             tests_failed <- tests_failed + 1;
@@ -455,9 +420,7 @@ action setup_player {
 		    self.belief_base <- [];
 		}
 
-        // -----------------------
         // TEST 1: recent_positions bounded queue
-        // -----------------------
         ask t {
             recent_positions <- [];
             recent_positions <- recent_positions + [{0,0}];
@@ -472,9 +435,7 @@ action setup_player {
 		do assert_true(last(t.recent_positions)  = point(0,3), "recent_positions keeps newest entries");
 
 
-        // -----------------------
         // TEST 2: breeze -> pit evidence increments; no breeze clears neighbors
-        // -----------------------
         list<point> neigh <- [{4,5},{6,5},{5,4},{5,6}];
 
 		ask t {
@@ -505,9 +466,7 @@ action setup_player {
         do assert_true(length(t.belief_base where (each.predicate = near_pit)) = 0,
                        "near_pit predicate is removed when breeze=false");
 
-        // -----------------------
         // TEST 3: glow memory bounded to MAX_GLOW_MEMORY
-        // -----------------------
 		ask t {
 		    gworld c1 <- gworld grid_at {2,2};
 		    current_cell <- c1; location <- c1.location;
@@ -529,9 +488,7 @@ action setup_player {
         do assert_true(length(t.belief_base where (each.predicate = near_gold)) > 0,
                        "near_gold predicate is present after glow=true (last update)");
 
-        // -----------------------
         // TEST 4: stench toggles near_wumpus predicate
-        // -----------------------
         ask t { do update_beliefs_from_percepts(false, true, false); }
         do assert_true(length(t.belief_base where (each.predicate = near_wumpus)) > 0,
                        "near_wumpus predicate is added when stench=true");
@@ -549,9 +506,6 @@ action setup_player {
         write "--------------------------------------------";
     }
     
-    // ======================================================
-// UNIT TESTS — SECTION 7 (Desires)
-// ======================================================
 action run_bdi_desire_unit_tests {
 
     write "--------------------------------------------";
@@ -587,9 +541,7 @@ action run_bdi_desire_unit_tests {
 
     player t <- one_of(player where each.is_tester);
 
-    // -----------------------
     // TEST 1: default desire = patrol only
-    // -----------------------
     ask t {
         desire_base <- [];
         perc_breeze <- false;
@@ -618,9 +570,7 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_avoid_wumpus)) = 0,
         "Default: wants_avoid_wumpus is not active");
 
-    // -----------------------
     // TEST 2: glow activates collect_gold (when no danger)
-    // -----------------------
     ask t {
         perc_breeze <- false;
         perc_stench <- false;
@@ -633,9 +583,7 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_avoid_wumpus)) = 0,
         "Glow only: wants_avoid_wumpus stays inactive");
 
-    // -----------------------
     // TEST 3: memory-based collect_gold (no glow now, but glow_mem exists)
-    // -----------------------
     ask t {
         perc_glow <- false;
         glow_mem_pos <- glow_mem_pos + [{cx, cy}];
@@ -645,9 +593,7 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) > 0,
         "Glow memory: wants_collect_gold remains active even without current glow");
 
-    // -----------------------
     // TEST 4: danger overrides collect (priority policy)
-    // -----------------------
     ask t {
         perc_glow <- true;
         perc_breeze <- true;   // danger cue
@@ -660,10 +606,8 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) = 0,
         "Breeze+Glow: wants_collect_gold is suppressed by danger priority");
 
-    // -----------------------
     // TEST 5: patrol next-cell selection avoids a highly risky neighbor
     // Build a controlled case: two safe neighbors, one is made risky by evidence
-    // -----------------------
     int east_x <- cx + 1;
     int west_x <- cx - 1;
 
@@ -698,12 +642,6 @@ action run_bdi_desire_unit_tests {
     write "--------------------------------------------";
 }
 
-// ======================================================
-// UNIT TESTS — SECTION 8 (Intentions & Plans)
-// ======================================================
-// ======================================================
-// UNIT TESTS — SECTION 8 (Intentions & Plans)
-// ======================================================
 action run_bdi_intention_unit_tests {
 
     write "--------------------------------------------";
@@ -870,14 +808,12 @@ action run_unit_tests {
     do test_stench_consistency;
     do test_glow_consistency;
 
-    // ----- Player tests (Section 5) -----
     do test_single_player;
     do test_player_spawn_safe;
     do test_player_step_is_neighbor;
     do test_player_multiple_steps_are_neighbors;
     do test_player_death_detection;
 
-    // ----- BDI tests (Sections 6–8) -----
     do run_bdi_belief_unit_tests;
     do run_bdi_desire_unit_tests;
     do run_bdi_intention_unit_tests;
@@ -991,7 +927,6 @@ action run_unit_tests {
         }
     }
 
-    // ---------------- PLAYER TESTS (SECTION 5) ----------------
 
     // 7) Exactly one player
     action test_single_player {
@@ -1134,9 +1069,6 @@ action run_unit_tests {
     }
 }
 
-// ============================================================
-//                 GRID: WUMPUS WORLD CELLS
-// ============================================================
 
 grid gworld width: grid_width height: grid_height neighbors: 4 {
 
@@ -1166,9 +1098,7 @@ grid gworld width: grid_width height: grid_height neighbors: 4 {
     }
 }
 
-// ============================================================
-//                 SPECIES: SMELLS / PERCEPTS
-// ============================================================
+// SPECIES: SMELLS / PERCEPTS
 
 species odorArea {
     aspect base {
@@ -1188,9 +1118,7 @@ species breezeArea {
     }
 }
 
-// ============================================================
 //                 SPECIES: WUMPUS, GOLD, PITS
-// ============================================================
 
 species wumpusArea {
     init { }
@@ -1208,18 +1136,10 @@ species pitArea {
     aspect base { draw square(4) color: #black border: #white; }
 }
 
-// ============================================================
-//                 SECTION 5: BASIC PLAYER AGENT
-// ============================================================
-// ============================================================
-//                 SECTION 5 + SECTION 6: BDI PLAYER
-// ============================================================
+//                BDI PLAYER
 
 species player skills: [moving] control: simple_bdi {
 
-    // ------------------------------
-    // SECTION 5 (kept): minimal state
-    // ------------------------------
     int  steps <- 0;
     bool alive <- true;
 
@@ -1229,32 +1149,19 @@ species player skills: [moving] control: simple_bdi {
     gworld current_cell <- nil;
     gworld last_cell    <- nil;
 
-    // Make sure any goto completes in a single tick for neighbor targets
     float speed <- 1000.0;
 
-    // ------------------------------
-    // SECTION 6: test helper flag
-    // ------------------------------
     bool is_tester <- false;
 
-    // ------------------------------
-    // SECTION 6: bounded memory capacities
-    // ------------------------------
     int MAX_RECENT_POS  <- 10;
     int MAX_SAFE_CELLS  <- 25;
     int MAX_EVIDENCE    <- 40;
     int MAX_GLOW_MEMORY <- 5;
 
-    // ------------------------------
-    // SECTION 6: extra self-state for later sections
-    // ------------------------------
     point  prev_pos   <- {0,0};
     string last_move  <- "none";
     int    belief_step <- 0;
 
-    // ------------------------------
-    // SECTION 6: bounded belief structures
-    // ------------------------------
     list<point> known_safe      <- [];
     list<point> recent_positions <- [];
 
@@ -1281,9 +1188,7 @@ species player skills: [moving] control: simple_bdi {
     list<point> neighbors4_tmp <- [];
     int tmp_count <- 0;
 
-    // ======================================================
     // Helper: compute Von Neumann neighbors (4-neighborhood)
-    // ======================================================
     action compute_neighbors4 (point p) {
         list<point> n <- [];
         int x <- int(p.x);
@@ -1297,9 +1202,7 @@ species player skills: [moving] control: simple_bdi {
         neighbors4_tmp <- n;
     }
 
-    // ======================================================
     // Helper: enforce bounded memories
-    // ======================================================
 action enforce_memory_bounds {
 
     if (length(recent_positions) > MAX_RECENT_POS) {
@@ -1330,16 +1233,12 @@ action enforce_memory_bounds {
 }
 
 
-    // ======================================================
     // Helper: count evidence occurrences (suspicion score)
-    // ======================================================
     action count_in_list (list<point> L, point p) {
         tmp_count <- length(L where (each = p));
     }
 
-    // ======================================================
     // Helper: set/unset a transient BDI belief predicate
-    // ======================================================
 	action set_transient_belief (predicate pr, bool active) {
 	    if (active) {
 	        if (length(belief_base where (each.predicate = pr)) = 0) {
@@ -1350,9 +1249,6 @@ action enforce_memory_bounds {
 	    }
 	}
 
-    // ======================================================
-    // SECTION 6 CORE: update beliefs from percepts
-    // ======================================================
 action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
 
     belief_step <- belief_step + 1;
@@ -1440,11 +1336,6 @@ action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
     do set_transient_belief(near_gold, glow);
 }
 
-
-
-    // ======================================================
-    // SECTION 6 REQUIRED: perception handling via `perceive`
-    // ======================================================
 	action perceive_and_revise_beliefs {
 	
 	    perc_breeze <- false;
@@ -1460,9 +1351,6 @@ action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
 	    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
 	}
 	
-	// ======================================================
-// SECTION 7: DESIRES (activation, persistence, priority)
-// ======================================================
 int RISK_THRESHOLD <- 2;              // evidence count >= 2 => "too risky"
 int COLLECT_PERSIST_TICKS <- 3;       // keep collect desire active for a few ticks
 int AVOID_PERSIST_TICKS   <- 1;       // keep avoid desire active for at least 1 extra tick
@@ -1473,9 +1361,6 @@ int avoid_persist   <- 0;
 // helper output for tests / debugging
 gworld patrol_next_cell <- nil;
 
-// ======================================================
-// SECTION 8: INTENTIONS (explicit) + plan execution
-// ======================================================
 string I_ESCAPE_PIT    <- "I_ESCAPE_PIT";
 string I_ESCAPE_WUMPUS <- "I_ESCAPE_WUMPUS";
 string I_GET_GOLD      <- "I_GET_GOLD";
@@ -1523,7 +1408,6 @@ action compute_local_risks_from_evidence (point here) {
     }
 }
 
-// --- SECTION 7 CORE: beliefs -> desires mapping + prioritization
 action update_desires_from_beliefs {
 
     if (current_cell = nil) { return; }
@@ -1565,9 +1449,6 @@ action update_desires_from_beliefs {
     do set_desire(wants_patrol, true, s_patrol);
 }
 
-// ======================================================
-// SECTION 7: PATROL PLAN (safe exploration step)
-// ======================================================
 action select_patrol_next_cell {
 
     patrol_next_cell <- nil;
@@ -1627,7 +1508,6 @@ action move_to_cell (gworld dest) {
 
     point dest_p <- { int(dest.grid_x), int(dest.grid_y) };
 
-    // STRICT SAFETY: never enter an UNKNOWN cell if we have ANY pit/wumpus evidence on it
     bool is_unknown_cell <- !(known_safe contains dest_p);
     bool is_gold_cell <- dest.has_gold;
 
@@ -1683,7 +1563,6 @@ action move_patrol_safe_one_step {
     }
 }
 
-// Minimal “collect” behavior for Section 7 (just bias movement near glow cues)
 action move_collect_gold_one_step {
 
     if (current_cell = nil) { return; }
@@ -1711,7 +1590,6 @@ action move_collect_gold_one_step {
         bool target_ok <- (targets contains p) or c.has_gold;
         bool safe_ok   <- (known_safe contains p) or c.has_gold;
 
-        // forbidden only applies to unknown/suspected cells
         bool is_forbidden <- (forbidden_cells contains p) and !(known_safe contains p);
 
         if (target_ok and safe_ok and !is_forbidden) {
@@ -1735,7 +1613,6 @@ action move_collect_gold_one_step {
 
 
 
-// Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
 action move_avoid_hazard_one_step {
 
     if (current_cell = nil) { return; }
@@ -1753,9 +1630,6 @@ action move_avoid_hazard_one_step {
 }
 	
 
-    // ------------------------------
-    // (kept): respawn + death check
-    // ------------------------------
     action respawn {
         if (spawn_cell != nil) {
             steps <- 0;
@@ -1782,9 +1656,6 @@ action move_avoid_hazard_one_step {
         }
     }
 
-    // ------------------------------
-    // (kept): random movement baseline
-    // ------------------------------
     action move_randomly_one_step {
 
         if (!alive) { return; }
@@ -1795,7 +1666,6 @@ action move_avoid_hazard_one_step {
 
         gworld next_cell <- one_of(neigh);
 
-        // store previous position + move label (for later sections)
         prev_pos <- location;
         int dx <- int(next_cell.location.x) - int(current_cell.location.x);
         int dy <- int(next_cell.location.y) - int(current_cell.location.y);
@@ -2181,23 +2051,12 @@ action bdi_cycle_step {
 
     
 
-    // One reflex does both: perceive first, then move
-// ------------------------------
-// BDI bootstrap: initial desire
-// ------------------------------
-// ------------------------------
-// SECTION 7: BDI bootstrap (default desire set)
-// ------------------------------
 init {
     // patrol exists as fallback; strengths are re-set each tick by update_desires_from_beliefs
     do add_desire(predicate: wants_patrol, strength: 0.4);
     do update_desires_from_beliefs;
 }
 
-// ------------------------------
-// SECTION 7: Plans per intention (priority handled by desire strengths)
-// Each plan: perceive -> revise beliefs -> update desires -> act
-// ------------------------------
 plan bdi_cycle_patrol intention: wants_patrol {
     if (alive and (not is_tester) and (not world.game_finished)) {
         do bdi_cycle_step;
@@ -2216,9 +2075,6 @@ plan bdi_cycle_avoid intention: wants_avoid_wumpus {
     }
 }
 
-    // ------------------------------
-    // (kept): appearance
-    // ------------------------------
     aspect base {
         rgb c <- #white;
 
@@ -2237,9 +2093,6 @@ plan bdi_cycle_avoid intention: wants_avoid_wumpus {
 }
 
 
-// ============================================================
-//                 EXPERIMENTS
-// ============================================================
 
 experiment Wumpus_experiment_1 type: gui {
 
