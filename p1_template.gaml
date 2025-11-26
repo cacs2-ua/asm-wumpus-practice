@@ -1836,17 +1836,32 @@ action plan_escape_wumpus_one_step {
 
 action execute_current_intention_one_step {
 
-    if (!alive) { return; }
+if (!alive) { return; }
 
-    if (current_intention = I_ESCAPE_PIT) {
-        do plan_escape_pit_one_step;
-    } else if (current_intention = I_ESCAPE_WUMPUS) {
-        do plan_escape_wumpus_one_step;
-    } else if (current_intention = I_GET_GOLD) {
-        do move_collect_gold_one_step;
-    } else {
-        do move_patrol_safe_one_step;
+// Opportunistic gold collection: if gold is here or adjacent, take it immediately
+if (current_cell != nil) {
+
+    if (current_cell.has_gold) {
+        do collect_gold_if_present;
+        return;
     }
+
+    gworld gold_neighbor <- one_of(current_cell.neighbors where (each.has_gold));
+    if (gold_neighbor != nil) {
+        do move_to_cell(gold_neighbor);
+        return;
+    }
+}
+
+if (current_intention = I_ESCAPE_PIT) {
+    do plan_escape_pit_one_step;
+} else if (current_intention = I_ESCAPE_WUMPUS) {
+    do plan_escape_wumpus_one_step;
+} else if (current_intention = I_GET_GOLD) {
+    do move_collect_gold_one_step;
+} else {
+    do move_patrol_safe_one_step;
+}
 }
 
 action bdi_cycle_step {
