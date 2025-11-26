@@ -10,8 +10,8 @@ global {
     int grid_width <- 8;     
     int grid_height <- 8;
 
-    int nb_gold <- 1;          // number of treasures (only used in random maps)
-    int nb_pits <- 6;          // number of pits     (only used in random maps)
+    int nb_gold <- 4;          // number of treasures (only used in random maps)
+    int nb_pits <- 3;          // number of pits     (only used in random maps)
 
     bool use_random_map <- true;   // false = use the predefined example map
 
@@ -61,6 +61,19 @@ int end_known_safe     <- 0;
 int end_forbidden      <- 0;
 int end_pit_evidence   <- 0;
 int end_wumpus_evidence<- 0;
+
+bool   auto_run_tests      <- true;   // set false in batch experiment
+bool   pause_on_end        <- true;   // set false in batch experiment
+bool   evaluation_enabled  <- false;  // set true in batch experiment
+
+int    max_cycles          <- 5000;   // timeout per run
+string metrics_file        <- "results/wumpus_metrics.csv";
+
+// extra per-run metrics (copied from player at end_game)
+int end_breeze_ticks            <- 0;
+int end_stench_ticks            <- 0;
+int end_blocked_pit_moves       <- 0;
+int end_blocked_wumpus_moves    <- 0;
 
 action reset_end_state {
     game_finished <- false;
@@ -119,6 +132,47 @@ action end_game (string outcome, string reason) {
     do pause;
 }
 
+action log_metrics_row {
+    if (!evaluation_enabled) { return; }
+
+    map<string, unknown> row <- [
+        "grid_w"::grid_width,
+        "grid_h"::grid_height,
+        "nb_pits"::nb_pits,
+        "nb_gold"::nb_gold,
+        "use_random_map"::use_random_map,
+
+        "outcome"::end_outcome,          // VICTORY | GAME OVER | TIMEOUT
+        "reason"::end_reason,            // all_gold_collected | pit | wumpus | max_cycles_reached
+
+        "cycle"::end_cycle,
+        "steps"::end_steps,
+
+        "gold_total"::end_gold_total,
+        "gold_collected"::end_gold_collected,
+        "gold_per_step"::((end_steps > 0) ? (float(end_gold_collected) / float(end_steps)) : 0.0),
+
+        "breeze_ticks"::end_breeze_ticks,
+        "stench_ticks"::end_stench_ticks,
+
+        "blocked_pit_moves"::end_blocked_pit_moves,
+        "blocked_wumpus_moves"::end_blocked_wumpus_moves,
+
+        "known_safe"::end_known_safe,
+        "forbidden"::end_forbidden,
+        "pit_evidence"::end_pit_evidence,
+        "wumpus_evidence"::end_wumpus_evidence
+    ];
+
+    // Appends 1 row per run; header written only if file does not exist.
+    save row to: file(metrics_file) format: "csv" header: true rewrite: false;
+}
+
+reflex timeout_end when: (!tests_running) and (!game_finished) and (cycle >= max_cycles) {
+    do end_game("TIMEOUT", "max_cycles_reached");
+}
+
+
 reflex check_end_conditions when: (!tests_running) and (!game_finished) {
 
     player p <- one_of(player where (!each.is_tester));
@@ -137,11 +191,14 @@ reflex check_end_conditions when: (!tests_running) and (!game_finished) {
 }
 
 
-    init {
-        do setup_world;
-        do setup_player;            
-        do run_unit_tests;          // run tests automatically on each reset
+init {
+    do setup_world;
+    do setup_player;
+
+    if (auto_run_tests) {
+        do run_unit_tests;
     }
+}
 
 
     // Create / reset the whole environment (grid contents & percept flags)
@@ -206,6 +263,11 @@ action setup_player {
         steps <- 0;
         alive <- true;
         death_cause <- "none";
+        
+        breeze_ticks <- 0;
+		stench_ticks <- 0;
+		blocked_pit_moves <- 0;
+		blocked_wumpus_moves <- 0;
     }
 
     if (debug_player) {
@@ -1187,6 +1249,11 @@ species player skills: [moving] control: simple_bdi {
     // temp variables for helpers
     list<point> neighbors4_tmp <- [];
     int tmp_count <- 0;
+    
+    int breeze_ticks         <- 0;
+	int stench_ticks         <- 0;
+	int blocked_pit_moves    <- 0;
+	int blocked_wumpus_moves <- 0;
 
     // Helper: compute Von Neumann neighbors (4-neighborhood)
     action compute_neighbors4 (point p) {
@@ -1336,20 +1403,24 @@ action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
     do set_transient_belief(near_gold, glow);
 }
 
-	action perceive_and_revise_beliefs {
-	
-	    perc_breeze <- false;
-	    perc_stench <- false;
-	    perc_glow   <- false;
-	
-	    if (current_cell != nil) {
-	        perc_breeze <- current_cell.breeze;
-	        perc_stench <- current_cell.stench;
-	        perc_glow   <- current_cell.glow;
-	    }
-	
-	    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
-	}
+action perceive_and_revise_beliefs {
+
+    perc_breeze <- false;
+    perc_stench <- false;
+    perc_glow   <- false;
+
+    if (current_cell != nil) {
+        perc_breeze <- current_cell.breeze;
+        perc_stench <- current_cell.stench;
+        perc_glow   <- current_cell.glow;
+    }
+
+    if (perc_breeze) { breeze_ticks <- breeze_ticks + 1; }
+    if (perc_stench) { stench_ticks <- stench_ticks + 1; }
+
+    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
+}
+
 	
 int RISK_THRESHOLD <- 2;              // evidence count >= 2 => "too risky"
 int COLLECT_PERSIST_TICKS <- 3;       // keep collect desire active for a few ticks
@@ -1521,6 +1592,9 @@ action move_to_cell (gworld dest) {
         if (debug_player) {
             write "BLOCKED MOVE to " + dest.location + " (unknown + evidence: pit=" + string(pit_cnt) + ", wumpus=" + string(w_cnt) + ")";
         }
+        
+        if (pit_cnt > 0) { blocked_pit_moves <- blocked_pit_moves + 1; }
+		if (w_cnt > 0)   { blocked_wumpus_moves <- blocked_wumpus_moves + 1; }
         return;
     }
 
@@ -1639,6 +1713,10 @@ action move_avoid_hazard_one_step {
             current_cell <- spawn_cell;
             last_cell <- spawn_cell;
             location <- spawn_cell.location;
+            breeze_ticks <- 0;
+			stench_ticks <- 0;
+			blocked_pit_moves <- 0;
+			blocked_wumpus_moves <- 0;
         }
     }
 
@@ -2273,4 +2351,27 @@ display tests_view {
         monitor "Number of failed tests"  value: tests_failed;
         monitor "Player count"            value: length(player);
     }
+}
+
+
+experiment Wumpus_batch_evaluation type: batch keep_seed: false repeat: 30 until: (game_finished or cycle >= max_cycles) {
+
+    // --- test cases (edit these lists as you want) ---
+    parameter "Grid width"  var: grid_width  among: [6, 8];
+    parameter "Grid height" var: grid_height among: [6, 8];
+
+    parameter "Number of pits" var: nb_pits among: [4, 6, 8];
+    parameter "Number of gold" var: nb_gold among: [2, 4];
+
+    parameter "Use random map" var: use_random_map among: [true, false];
+
+    // --- evaluation controls ---
+    parameter "Max cycles (timeout)" var: max_cycles among: [5000];
+    parameter "Metrics CSV path"     var: metrics_file among: ["results/wumpus_metrics.csv"];
+
+    // --- make batch runs non-interactive + fast ---
+    parameter "Debug player"         var: debug_player        among: [false];
+    parameter "Auto run unit tests"  var: auto_run_tests      among: [false];
+    parameter "Pause on end"         var: pause_on_end        among: [false];
+    parameter "Enable metrics log"   var: evaluation_enabled  among: [true];
 }
