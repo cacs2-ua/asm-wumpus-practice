@@ -21,6 +21,27 @@ global {
 
     bool debug_player <- true;     // set true to print each move to the console
 
+    // ---------- BDI PREDICATES (global symbols) ----------
+    string P_WANTS_PATROL       <- "wants_patrol";
+    string P_WANTS_COLLECT_GOLD <- "wants_collect_gold";
+    string P_WANTS_AVOID_WUMPUS <- "wants_avoid_wumpus";
+
+    string P_NEAR_PIT    <- "near_pit";
+    string P_NEAR_GOLD   <- "near_gold";
+    string P_NEAR_WUMPUS <- "near_wumpus";
+
+    // Desire-related predicates required by the practice
+    predicate wants_patrol       <- new_predicate(P_WANTS_PATROL);
+    predicate wants_collect_gold <- new_predicate(P_WANTS_COLLECT_GOLD);
+    predicate wants_avoid_wumpus <- new_predicate(P_WANTS_AVOID_WUMPUS);
+
+    // Transient perception predicates (near_x)
+    predicate near_pit    <- new_predicate(P_NEAR_PIT);
+    predicate near_gold   <- new_predicate(P_NEAR_GOLD);
+    predicate near_wumpus <- new_predicate(P_NEAR_WUMPUS);
+	
+
+
     // ---------- BOOKKEEPING FOR TESTS ----------
 
     bool tests_executed <- false;
@@ -242,6 +263,143 @@ global {
     //                  "UNIT TESTS" (ENVIRONMENT + PLAYER)
     // ============================================================
 
+	    // ======================================================
+    // UNIT TESTS — SECTION 6 (Beliefs)
+    // ======================================================
+    action assert_true (bool cond, string msg) {
+        if (!cond) {
+            tests_failed <- tests_failed + 1;
+            write ("[FAIL] " + msg);
+        } else {
+            write ("[ OK ] " + msg);
+        }
+    }
+
+    action run_bdi_belief_unit_tests {
+
+        write "--------------------------------------------";
+        write "RUNNING UNIT TESTS — Section 6 (Beliefs)";
+        write "--------------------------------------------";
+
+        int failed_before <- tests_failed;
+
+        // Create a dedicated tester agent (won't walk randomly)
+        create player number: 1 {
+            is_tester <- true;
+            alive <- true;
+            location <- {5,5};   // assumes grid >= 6x6 (default 10x10 is OK)
+        }
+
+        player t <- one_of(player where each.is_tester);
+
+        // reset belief structures + BDI belief base
+		ask t {
+		    self.MAX_RECENT_POS  <- 3;
+		    self.MAX_SAFE_CELLS  <- 10;
+		    self.MAX_EVIDENCE    <- 50;
+		    self.MAX_GLOW_MEMORY <- 2;
+		
+		    self.recent_positions <- [];
+		    self.known_safe <- [];
+		    self.pit_evidence <- [];
+		    self.wumpus_evidence <- [];
+		
+		    self.glow_mem_pos <- [];
+		    self.glow_mem_candidates <- [];
+		    self.glow_mem_step <- [];
+		
+		    self.belief_base <- [];
+		}
+
+        // -----------------------
+        // TEST 1: recent_positions bounded queue
+        // -----------------------
+        ask t {
+            recent_positions <- [];
+            recent_positions <- recent_positions + [{0,0}];
+            recent_positions <- recent_positions + [{0,1}];
+            recent_positions <- recent_positions + [{0,2}];
+            recent_positions <- recent_positions + [{0,3}];
+            do enforce_memory_bounds;
+        }
+
+        do assert_true(length(t.recent_positions) = 3, "recent_positions is bounded to MAX_RECENT_POS");
+        do assert_true(t.recent_positions[0] = {0,1}, "recent_positions forgets oldest entries");
+        do assert_true(t.recent_positions[2] = {0,3}, "recent_positions keeps newest entries");
+
+        // -----------------------
+        // TEST 2: breeze -> pit evidence increments; no breeze clears neighbors
+        // -----------------------
+        list<point> neigh <- [{4,5},{6,5},{5,4},{5,6}];
+
+        ask t {
+            location <- {5,5};
+            do update_beliefs_from_percepts(true, false, false);
+        }
+
+        loop p over: neigh {
+            do assert_true(length(t.pit_evidence where (each = p)) = 1,
+                           "breeze adds pit evidence for neighbor " + string(p));
+        }
+
+        do assert_true(length(t.belief_base where (each.predicate = near_pit)) > 0,
+                       "near_pit predicate is added when breeze=true");
+
+        ask t {
+            do update_beliefs_from_percepts(false, false, false);
+        }
+
+        loop p over: neigh {
+            do assert_true(length(t.pit_evidence where (each = p)) = 0,
+                           "no breeze removes pit evidence for neighbor " + string(p));
+        }
+
+        do assert_true(length(t.belief_base where (each.predicate = near_pit)) = 0,
+                       "near_pit predicate is removed when breeze=false");
+
+        // -----------------------
+        // TEST 3: glow memory bounded to MAX_GLOW_MEMORY
+        // -----------------------
+        ask t {
+            location <- {2,2};
+            do update_beliefs_from_percepts(false, false, true);
+
+            location <- {3,3};
+            do update_beliefs_from_percepts(false, false, true);
+
+            location <- {4,4};
+            do update_beliefs_from_percepts(false, false, true);
+        }
+
+        do assert_true(length(t.glow_mem_pos) = 2, "glow_mem_pos is bounded to MAX_GLOW_MEMORY");
+        do assert_true(t.glow_mem_pos[0] = {3,3} and t.glow_mem_pos[1] = {4,4},
+                       "glow memory keeps only the most recent cues");
+
+        do assert_true(length(t.belief_base where (each.predicate = near_gold)) > 0,
+                       "near_gold predicate is present after glow=true (last update)");
+
+        // -----------------------
+        // TEST 4: stench toggles near_wumpus predicate
+        // -----------------------
+        ask t { do update_beliefs_from_percepts(false, true, false); }
+        do assert_true(length(t.belief_base where (each.predicate = near_wumpus)) > 0,
+                       "near_wumpus predicate is added when stench=true");
+
+        ask t { do update_beliefs_from_percepts(false, false, false); }
+        do assert_true(length(t.belief_base where (each.predicate = near_wumpus)) = 0,
+                       "near_wumpus predicate is removed when stench=false");
+
+        // Cleanup tester
+        ask t { do die; }
+
+        int failed_now <- tests_failed - failed_before;
+        write "--------------------------------------------";
+        write ("UNIT TESTS FINISHED — new failures: " + string(failed_now));
+        write "--------------------------------------------";
+    }
+	
+	
+
     action run_unit_tests {
 
         tests_executed <- true;
@@ -264,6 +422,9 @@ global {
         do test_player_step_is_neighbor;
         do test_player_multiple_steps_are_neighbors;
         do test_player_death_detection;
+
+        // ----- BDI Belief tests (Section 6) -----
+        do run_bdi_belief_unit_tests;
 
         if (tests_failed = 0) {
             write "All tests PASSED";
@@ -582,10 +743,15 @@ species pitArea {
 // ============================================================
 //                 SECTION 5: BASIC PLAYER AGENT
 // ============================================================
+// ============================================================
+//                 SECTION 5 + SECTION 6: BDI PLAYER
+// ============================================================
 
-species player skills: [moving] {
+species player skills: [moving] control: simple_bdi {
 
-    // Minimal state (useful now + later for BDI)
+    // ------------------------------
+    // SECTION 5 (kept): minimal state
+    // ------------------------------
     int  steps <- 0;
     bool alive <- true;
 
@@ -598,6 +764,240 @@ species player skills: [moving] {
     // Make sure any goto completes in a single tick for neighbor targets
     float speed <- 1000.0;
 
+    // ------------------------------
+    // SECTION 6: test helper flag
+    // ------------------------------
+    bool is_tester <- false;
+
+    // ------------------------------
+    // SECTION 6: bounded memory capacities
+    // ------------------------------
+    int MAX_RECENT_POS  <- 10;
+    int MAX_SAFE_CELLS  <- 25;
+    int MAX_EVIDENCE    <- 40;
+    int MAX_GLOW_MEMORY <- 5;
+
+    // ------------------------------
+    // SECTION 6: extra self-state for later sections
+    // ------------------------------
+    point  prev_pos   <- {0,0};
+    string last_move  <- "none";
+    int    belief_step <- 0;
+
+    // ------------------------------
+    // SECTION 6: bounded belief structures
+    // ------------------------------
+    list<point> known_safe      <- [];
+    list<point> recent_positions <- [];
+
+    list<point> pit_evidence    <- [];
+    list<point> wumpus_evidence <- [];
+
+    list<point>        glow_mem_pos        <- [];
+    list<list<point>>  glow_mem_candidates <- [];
+    list<int>          glow_mem_step       <- [];
+
+    // Transient perception snapshot (current tick)
+    bool perc_breeze <- false;
+    bool perc_stench <- false;
+    bool perc_glow   <- false;
+
+    list<point> cand_pit    <- [];
+    list<point> cand_wumpus <- [];
+    list<point> cand_gold   <- [];
+
+    int risk_pit    <- 0;
+    int risk_wumpus <- 0;
+
+    // temp variables for helpers
+    list<point> neighbors4_tmp <- [];
+    int tmp_count <- 0;
+
+    // ======================================================
+    // Helper: compute Von Neumann neighbors (4-neighborhood)
+    // ======================================================
+    action compute_neighbors4 (point p) {
+        list<point> n <- [];
+        int x <- int(p.x);
+        int y <- int(p.y);
+
+        if (x - 1 >= 0)         { n <- n + [{x - 1, y}]; }
+        if (x + 1 < grid_width) { n <- n + [{x + 1, y}]; }
+        if (y - 1 >= 0)         { n <- n + [{x, y - 1}]; }
+        if (y + 1 < grid_height){ n <- n + [{x, y + 1}]; }
+
+        neighbors4_tmp <- n;
+    }
+
+    // ======================================================
+    // Helper: enforce bounded memories
+    // ======================================================
+    action enforce_memory_bounds {
+
+        int L;
+
+        L <- length(recent_positions);
+        if (L > MAX_RECENT_POS) {
+            recent_positions <- recent_positions[(L - MAX_RECENT_POS) :: (L - 1)];
+        }
+
+        L <- length(known_safe);
+        if (L > MAX_SAFE_CELLS) {
+            known_safe <- known_safe[(L - MAX_SAFE_CELLS) :: (L - 1)];
+        }
+
+        L <- length(pit_evidence);
+        if (L > MAX_EVIDENCE) {
+            pit_evidence <- pit_evidence[(L - MAX_EVIDENCE) :: (L - 1)];
+        }
+
+        L <- length(wumpus_evidence);
+        if (L > MAX_EVIDENCE) {
+            wumpus_evidence <- wumpus_evidence[(L - MAX_EVIDENCE) :: (L - 1)];
+        }
+
+        L <- length(glow_mem_pos);
+        if (L > MAX_GLOW_MEMORY) {
+            int start <- L - MAX_GLOW_MEMORY;
+            glow_mem_pos        <- glow_mem_pos[start :: (L - 1)];
+            glow_mem_candidates <- glow_mem_candidates[start :: (L - 1)];
+            glow_mem_step       <- glow_mem_step[start :: (L - 1)];
+        }
+    }
+
+    // ======================================================
+    // Helper: count evidence occurrences (suspicion score)
+    // ======================================================
+    action count_in_list (list<point> L, point p) {
+        tmp_count <- length(L where (each = p));
+    }
+
+    // ======================================================
+    // Helper: set/unset a transient BDI belief predicate
+    // ======================================================
+	action set_transient_belief (predicate pr, bool active) {
+	    if (active) {
+	        if (length(belief_base where (each.predicate = pr)) = 0) {
+	            do add_belief(predicate: pr, strength: 1.0);
+	        }
+	    } else {
+	        belief_base <- belief_base where (each.predicate != pr);
+	    }
+	}
+
+    // ======================================================
+    // SECTION 6 CORE: update beliefs from percepts
+    // ======================================================
+    action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
+
+        belief_step <- belief_step + 1;
+
+        // memory of visited cells
+        recent_positions <- recent_positions + [location];
+
+        // neighbor candidates
+        do compute_neighbors4(location);
+        list<point> neigh <- neighbors4_tmp;
+
+        // reset candidates
+        cand_pit <- [];
+        cand_wumpus <- [];
+        cand_gold <- [];
+
+        // (A) Breeze -> pit evidence
+        if (breeze) {
+            cand_pit <- neigh;
+            loop p over: neigh {
+                if (!(known_safe contains p)) {
+                    pit_evidence <- pit_evidence + [p];
+                }
+            }
+        } else {
+            // no breeze => neighbors cannot contain pits
+            loop p over: neigh {
+                pit_evidence <- pit_evidence where (each != p);
+            }
+        }
+
+        // (B) Stench -> wumpus evidence
+        if (stench) {
+            cand_wumpus <- neigh;
+            loop p over: neigh {
+                if (!(known_safe contains p)) {
+                    wumpus_evidence <- wumpus_evidence + [p];
+                }
+            }
+        } else {
+            // no stench => neighbors cannot contain the Wumpus
+            loop p over: neigh {
+                wumpus_evidence <- wumpus_evidence where (each != p);
+            }
+        }
+
+        // (C) Safe cells only if BOTH no breeze and no stench
+        if (!breeze and !stench) {
+            loop p over: neigh {
+                if (!(known_safe contains p)) { known_safe <- known_safe + [p]; }
+            }
+        }
+
+        // (D) Glow -> bounded glow memory
+        if (glow) {
+            cand_gold <- neigh;
+            glow_mem_pos        <- glow_mem_pos + [location];
+            glow_mem_candidates <- glow_mem_candidates + [neigh];
+            glow_mem_step       <- glow_mem_step + [belief_step];
+        }
+
+        // (E) risk metrics (max evidence count among candidates)
+        risk_pit <- 0;
+        if (breeze) {
+            loop p over: cand_pit {
+                do count_in_list(pit_evidence, p);
+                if (tmp_count > risk_pit) { risk_pit <- tmp_count; }
+            }
+        }
+
+        risk_wumpus <- 0;
+        if (stench) {
+            loop p over: cand_wumpus {
+                do count_in_list(wumpus_evidence, p);
+                if (tmp_count > risk_wumpus) { risk_wumpus <- tmp_count; }
+            }
+        }
+
+        // (F) enforce bounded memory
+        do enforce_memory_bounds;
+
+        // (G) transient predicates in belief_base
+        do set_transient_belief(near_pit, breeze);
+        do set_transient_belief(near_wumpus, stench);
+        do set_transient_belief(near_gold, glow);
+    }
+
+    // ======================================================
+    // SECTION 6 REQUIRED: perception handling via `perceive`
+    // ======================================================
+	action perceive_and_revise_beliefs {
+	
+	    perc_breeze <- false;
+	    perc_stench <- false;
+	    perc_glow   <- false;
+	
+	    gworld c <- one_of(gworld where (each.location = location));
+	    if (c != nil) {
+	        perc_breeze <- c.breeze;
+	        perc_stench <- c.stench;
+	        perc_glow   <- c.glow;
+	    }
+	
+	    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
+	}
+
+
+    // ------------------------------
+    // (kept): respawn + death check
+    // ------------------------------
     action respawn {
         if (spawn_cell != nil) {
             steps <- 0;
@@ -624,20 +1024,32 @@ species player skills: [moving] {
         }
     }
 
+    // ------------------------------
+    // (kept): random movement baseline
+    // ------------------------------
     action move_randomly_one_step {
 
         if (!alive) { return; }
         if (current_cell = nil) { return; }
 
         list<gworld> neigh <- current_cell.neighbors;
+        if (length(neigh) = 0) { return; }
 
-        if (length(neigh) = 0) { return; } // should never happen in a normal grid
         gworld next_cell <- one_of(neigh);
+
+        // store previous position + move label (for later sections)
+        prev_pos <- location;
+        int dx <- int(next_cell.location.x) - int(current_cell.location.x);
+        int dy <- int(next_cell.location.y) - int(current_cell.location.y);
+        if (dx = 1) { last_move <- "E"; }
+        else if (dx = -1) { last_move <- "W"; }
+        else if (dy = 1) { last_move <- "S"; }
+        else if (dy = -1) { last_move <- "N"; }
+        else { last_move <- "none"; }
 
         last_cell <- current_cell;
         current_cell <- next_cell;
 
-        // Use moving skill (goto) + set discrete cell center
         do goto target: next_cell.location;
         location <- next_cell.location;
 
@@ -650,10 +1062,39 @@ species player skills: [moving] {
         do check_lethal_cell;
     }
 
-    reflex random_walk {
+    // One reflex does both: perceive first, then move
+// ------------------------------
+// BDI bootstrap: initial desire
+// ------------------------------
+init {
+    // Simple baseline: just patrol (random walk)
+    do add_desire(predicate: wants_patrol, strength: 1.0);
+}
+
+// ------------------------------
+// BDI perception (runs each tick in simple_bdi)
+// ------------------------------
+plan patrol intention: wants_patrol {
+    if (alive and (not is_tester)) {
+        do perceive_and_revise_beliefs;   // <-- usa tu percepción manual (one_of gworld ...)
         do move_randomly_one_step;
     }
+}
 
+// ------------------------------
+// BDI plan: patrol = random walk baseline
+// ------------------------------
+plan patrol intention: wants_patrol {
+    if (alive and (not is_tester)) {
+        do move_randomly_one_step;
+    }
+}
+
+
+
+    // ------------------------------
+    // (kept): appearance
+    // ------------------------------
     aspect base {
         rgb c <- #white;
 
@@ -670,6 +1111,7 @@ species player skills: [moving] {
         draw circle(2.2) color: c border: #black;
     }
 }
+
 
 // ============================================================
 //                 EXPERIMENTS
