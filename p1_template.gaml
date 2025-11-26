@@ -9,11 +9,11 @@ global {
 
     // ---------- PARAMETERS FOR THE ENVIRONMENT ----------
 
-    int grid_width <- 10;     // can be changed from the experiment
-    int grid_height <- 10;
+    int grid_width <- 8;     // can be changed from the experiment
+    int grid_height <- 8;
 
-    int nb_gold <- 6;          // number of treasures (only used in random maps)
-    int nb_pits <- 8;          // number of pits     (only used in random maps)
+    int nb_gold <- 4;          // number of treasures (only used in random maps)
+    int nb_pits <- 6;          // number of pits     (only used in random maps)
 
     bool use_random_map <- true;   // false = use the predefined example map
 
