@@ -324,8 +324,9 @@ global {
         }
 
         do assert_true(length(t.recent_positions) = 3, "recent_positions is bounded to MAX_RECENT_POS");
-        do assert_true(t.recent_positions[0] = {0,1}, "recent_positions forgets oldest entries");
-        do assert_true(t.recent_positions[2] = {0,3}, "recent_positions keeps newest entries");
+		do assert_true(first(t.recent_positions) = point(0,1), "recent_positions forgets oldest entries");
+		do assert_true(last(t.recent_positions)  = point(0,3), "recent_positions keeps newest entries");
+
 
         // -----------------------
         // TEST 2: breeze -> pit evidence increments; no breeze clears neighbors
@@ -832,38 +833,30 @@ species player skills: [moving] control: simple_bdi {
     // ======================================================
     // Helper: enforce bounded memories
     // ======================================================
-    action enforce_memory_bounds {
+   action enforce_memory_bounds {
 
-        int L;
-
-        L <- length(recent_positions);
-        if (L > MAX_RECENT_POS) {
-            recent_positions <- recent_positions[(L - MAX_RECENT_POS) :: (L - 1)];
-        }
-
-        L <- length(known_safe);
-        if (L > MAX_SAFE_CELLS) {
-            known_safe <- known_safe[(L - MAX_SAFE_CELLS) :: (L - 1)];
-        }
-
-        L <- length(pit_evidence);
-        if (L > MAX_EVIDENCE) {
-            pit_evidence <- pit_evidence[(L - MAX_EVIDENCE) :: (L - 1)];
-        }
-
-        L <- length(wumpus_evidence);
-        if (L > MAX_EVIDENCE) {
-            wumpus_evidence <- wumpus_evidence[(L - MAX_EVIDENCE) :: (L - 1)];
-        }
-
-        L <- length(glow_mem_pos);
-        if (L > MAX_GLOW_MEMORY) {
-            int start <- L - MAX_GLOW_MEMORY;
-            glow_mem_pos        <- glow_mem_pos[start :: (L - 1)];
-            glow_mem_candidates <- glow_mem_candidates[start :: (L - 1)];
-            glow_mem_step       <- glow_mem_step[start :: (L - 1)];
-        }
+    if (length(recent_positions) > MAX_RECENT_POS) {
+        recent_positions <- last(MAX_RECENT_POS, recent_positions);
     }
+
+    if (length(known_safe) > MAX_SAFE_CELLS) {
+        known_safe <- last(MAX_SAFE_CELLS, known_safe);
+    }
+
+    if (length(pit_evidence) > MAX_EVIDENCE) {
+        pit_evidence <- last(MAX_EVIDENCE, pit_evidence);
+    }
+
+    if (length(wumpus_evidence) > MAX_EVIDENCE) {
+        wumpus_evidence <- last(MAX_EVIDENCE, wumpus_evidence);
+    }
+
+    if (length(glow_mem_pos) > MAX_GLOW_MEMORY) {
+        glow_mem_pos        <- last(MAX_GLOW_MEMORY, glow_mem_pos);
+        glow_mem_candidates <- last(MAX_GLOW_MEMORY, glow_mem_candidates);
+        glow_mem_step       <- last(MAX_GLOW_MEMORY, glow_mem_step);
+    }
+}
 
     // ======================================================
     // Helper: count evidence occurrences (suspicion score)
@@ -984,16 +977,14 @@ species player skills: [moving] control: simple_bdi {
 	    perc_stench <- false;
 	    perc_glow   <- false;
 	
-	    gworld c <- one_of(gworld where (each.location = location));
-	    if (c != nil) {
-	        perc_breeze <- c.breeze;
-	        perc_stench <- c.stench;
-	        perc_glow   <- c.glow;
+	    if (current_cell != nil) {
+	        perc_breeze <- current_cell.breeze;
+	        perc_stench <- current_cell.stench;
+	        perc_glow   <- current_cell.glow;
 	    }
 	
 	    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
 	}
-
 
     // ------------------------------
     // (kept): respawn + death check
@@ -1076,21 +1067,10 @@ init {
 // ------------------------------
 plan patrol intention: wants_patrol {
     if (alive and (not is_tester)) {
-        do perceive_and_revise_beliefs;   // <-- usa tu percepción manual (one_of gworld ...)
+        do perceive_and_revise_beliefs;
         do move_randomly_one_step;
     }
 }
-
-// ------------------------------
-// BDI plan: patrol = random walk baseline
-// ------------------------------
-plan patrol intention: wants_patrol {
-    if (alive and (not is_tester)) {
-        do move_randomly_one_step;
-    }
-}
-
-
 
     // ------------------------------
     // (kept): appearance
