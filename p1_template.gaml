@@ -1637,12 +1637,19 @@ action move_collect_gold_one_step {
 
 // Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
 action move_avoid_hazard_one_step {
+
     if (current_cell = nil) { return; }
+
+    // Backtrack only if it does not create a forbidden 2-cycle
     if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
-        do move_to_cell(last_cell);
-    } else {
-        do move_patrol_safe_one_step;
+        point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
+        if (!(forbidden_cells contains back_p)) {
+            do move_to_cell(last_cell);
+            return;
+        }
     }
+
+    do move_patrol_safe_one_step;
 }
 	
 
@@ -1826,12 +1833,16 @@ action plan_escape_pit_one_step {
     point bad <- { int(current_cell.grid_x), int(current_cell.grid_y) };
     do add_forbidden_cell(bad);
 
-    // Reactive "undo last movement" (spec requirement)
+    // Reactive "undo last movement" ONLY if it does not create a forbidden 2-cycle
     if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
-        do move_to_cell(last_cell);
-    } else {
-        do move_patrol_safe_one_step;
+        point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
+        if (!(forbidden_cells contains back_p)) {
+            do move_to_cell(last_cell);
+            return;
+        }
     }
+
+    do move_patrol_safe_one_step;
 }
 
 action plan_escape_wumpus_one_step {
