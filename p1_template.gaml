@@ -258,6 +258,37 @@ global {
             create breezeArea { location <- c.location; }
         }
     }
+    
+    
+    action rebuild_gold_percepts {
+
+    // Clear gold + glow and remove current glow overlays
+    ask gworld {
+        has_gold <- false;
+        glow <- false;
+    }
+    ask glitterArea { do die; }
+
+    // Rebuild from current goldArea agents
+    ask goldArea {
+
+        // Find the underlying grid cell at the same location
+        gworld gc <- one_of(gworld where (each.location = location));
+
+        if (gc != nil) {
+            ask gc { has_gold <- true; }
+
+            list<gworld> neigh <- [];
+            ask gc { neigh <- neighbors; }
+
+            loop c over: neigh {
+                ask c { glow <- true; }
+                create glitterArea { location <- c.location; }
+            }
+        }
+    }
+}
+    
 
     // ============================================================
     //                  "UNIT TESTS" (ENVIRONMENT + PLAYER)
@@ -998,7 +1029,7 @@ species player skills: [moving] control: simple_bdi {
     // ======================================================
     // Helper: enforce bounded memories
     // ======================================================
-   action enforce_memory_bounds {
+action enforce_memory_bounds {
 
     if (length(recent_positions) > MAX_RECENT_POS) {
         recent_positions <- last(MAX_RECENT_POS, recent_positions);
@@ -1021,7 +1052,12 @@ species player skills: [moving] control: simple_bdi {
         glow_mem_candidates <- last(MAX_GLOW_MEMORY, glow_mem_candidates);
         glow_mem_step       <- last(MAX_GLOW_MEMORY, glow_mem_step);
     }
+
+    if (length(forbidden_cells) > MAX_FORBIDDEN) {
+        forbidden_cells <- last(MAX_FORBIDDEN, forbidden_cells);
+    }
 }
+
 
     // ======================================================
     // Helper: count evidence occurrences (suspicion score)
@@ -1171,6 +1207,26 @@ int avoid_persist   <- 0;
 // helper output for tests / debugging
 gworld patrol_next_cell <- nil;
 
+// ======================================================
+// SECTION 8: INTENTIONS (explicit) + plan execution
+// ======================================================
+string I_ESCAPE_PIT    <- "I_ESCAPE_PIT";
+string I_ESCAPE_WUMPUS <- "I_ESCAPE_WUMPUS";
+string I_GET_GOLD      <- "I_GET_GOLD";
+string I_PATROL        <- "I_PATROL";
+
+string current_intention <- I_PATROL;
+int    intention_age     <- 0;
+
+// Intention inertia (anti-thrashing)
+int INTENTION_MIN_ESCAPE_TICKS <- 1;
+int INTENTION_MIN_GOLD_TICKS   <- 3;
+
+// Cell-level "do not re-enter" heuristic after an escape
+int MAX_FORBIDDEN <- 20;
+list<point> forbidden_cells <- [];
+
+
 // --- helper: add/remove a desire cleanly (avoid duplicates)
 action set_desire (predicate pr, bool active, float strength_val) {
 
@@ -1265,7 +1321,9 @@ action select_patrol_next_cell {
 
         int pit_cnt <- length(pit_evidence where (each = p));
         int w_cnt   <- length(wumpus_evidence where (each = p));
-        bool too_risky <- (pit_cnt >= RISK_THRESHOLD) or (w_cnt >= RISK_THRESHOLD);
+
+        bool forbidden <- (forbidden_cells contains p);
+        bool too_risky <- forbidden or (pit_cnt >= RISK_THRESHOLD) or (w_cnt >= RISK_THRESHOLD);
 
         if (!too_risky) {
             acceptable <- acceptable + [c];
@@ -1279,25 +1337,22 @@ action select_patrol_next_cell {
         }
     }
 
-    // prefer: safe & not recent
     if (length(safe_not_recent) > 0) {
         patrol_next_cell <- one_of(safe_not_recent);
         return;
     }
 
-    // else: safe
     if (length(safe_any) > 0) {
         patrol_next_cell <- one_of(safe_any);
         return;
     }
 
-    // else: acceptable (not "too risky")
     if (length(acceptable) > 0) {
         patrol_next_cell <- one_of(acceptable);
         return;
     }
 
-    // else: all risky => choose least risky neighbor (controlled risk)
+    // Fallback: all risky/forbidden => choose least risky
     gworld best <- neigh[0];
     int best_score <- 999999;
 
@@ -1316,13 +1371,13 @@ action select_patrol_next_cell {
     patrol_next_cell <- best;
 }
 
+
 action move_to_cell (gworld dest) {
 
     if (!alive) { return; }
     if (current_cell = nil) { return; }
     if (dest = nil) { return; }
 
-    // compute move label BEFORE updating current_cell
     gworld from <- current_cell;
 
     prev_pos <- location;
@@ -1345,11 +1400,15 @@ action move_to_cell (gworld dest) {
     steps <- steps + 1;
 
     if (debug_player) {
-        write "Player step " + steps + " -> " + location;
+        write "Player step " + steps + " -> " + location + " | intention=" + current_intention;
     }
 
     do check_lethal_cell;
+    if (alive) {
+        do collect_gold_if_present;
+    }
 }
+
 
 action move_patrol_safe_one_step {
     do select_patrol_next_cell;
@@ -1363,7 +1422,6 @@ action move_collect_gold_one_step {
 
     if (current_cell = nil) { return; }
 
-    // Target points: current glow candidates, else last remembered glow candidates
     list<point> targets <- [];
 
     if (perc_glow) {
@@ -1377,10 +1435,11 @@ action move_collect_gold_one_step {
     list<gworld> preferred <- [];
     loop c over: neigh {
         point p <- { int(c.grid_x), int(c.grid_y) };
-        if (targets contains p) { preferred <- preferred + [c]; }
+        if ((targets contains p) and !(forbidden_cells contains p)) {
+            preferred <- preferred + [c];
+        }
     }
 
-    // Filter preferred by risk threshold
     list<gworld> preferred_safe <- [];
     loop c over: preferred {
         point p <- { int(c.grid_x), int(c.grid_y) };
@@ -1397,6 +1456,7 @@ action move_collect_gold_one_step {
         do move_patrol_safe_one_step;
     }
 }
+
 
 // Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
 action move_avoid_hazard_one_step {
@@ -1475,6 +1535,161 @@ action move_avoid_hazard_one_step {
 
         do check_lethal_cell;
     }
+    
+    action add_forbidden_cell(point p) {
+    if (!(forbidden_cells contains p)) {
+        forbidden_cells <- forbidden_cells + [p];
+    }
+    if (length(forbidden_cells) > MAX_FORBIDDEN) {
+        forbidden_cells <- last(MAX_FORBIDDEN, forbidden_cells);
+    }
+}
+
+action purge_glow_memory_of_point(point q) {
+
+    if (length(glow_mem_pos) = 0) { return; }
+
+    list<point> new_pos <- [];
+    list<list<point>> new_cand <- [];
+    list<int> new_step <- [];
+
+    int n <- length(glow_mem_pos);
+
+    loop i from: 0 to: (n - 1) {
+        bool keep <- true;
+
+        if (glow_mem_pos[i] = q) { keep <- false; }
+        else if (glow_mem_candidates[i] contains q) { keep <- false; }
+
+        if (keep) {
+            new_pos  <- new_pos  + [glow_mem_pos[i]];
+            new_cand <- new_cand + [glow_mem_candidates[i]];
+            new_step <- new_step + [glow_mem_step[i]];
+        }
+    }
+
+    glow_mem_pos        <- new_pos;
+    glow_mem_candidates <- new_cand;
+    glow_mem_step       <- new_step;
+}
+
+action collect_gold_if_present {
+
+    if (current_cell = nil) { return; }
+
+    if (current_cell.has_gold) {
+
+        point here <- { int(current_cell.grid_x), int(current_cell.grid_y) };
+
+        // Remove gold object at this cell
+        ask goldArea where (each.location = current_cell.location) { do die; }
+
+        // Rebuild gold flags + glow overlays to keep the world consistent
+        ask world { do rebuild_gold_percepts; }
+
+        // Clean internal memory so we do not keep chasing this gold
+        do purge_glow_memory_of_point(here);
+
+        if (debug_player) {
+            write "GOLD COLLECTED at " + current_cell.location;
+        }
+    }
+}
+
+action select_and_update_intention {
+
+    string proposed <- I_PATROL;
+
+    bool danger_pit    <- perc_breeze or (risk_pit >= RISK_THRESHOLD);
+    bool danger_wumpus <- perc_stench or (risk_wumpus >= RISK_THRESHOLD);
+
+    // Priority: safety first. If both dangers, tie -> Wumpus.
+    if (danger_pit or danger_wumpus) {
+        if (danger_wumpus and (!danger_pit or (risk_wumpus >= risk_pit))) {
+            proposed <- I_ESCAPE_WUMPUS;
+        } else {
+            proposed <- I_ESCAPE_PIT;
+        }
+    } else {
+        bool gold_active <- perc_glow or (length(glow_mem_pos) > 0) or (collect_persist > 0);
+        proposed <- gold_active ? I_GET_GOLD : I_PATROL;
+    }
+
+    // Inertia: keep escape for at least 1 tick
+    if ((current_intention = I_ESCAPE_PIT or current_intention = I_ESCAPE_WUMPUS)
+        and intention_age < INTENTION_MIN_ESCAPE_TICKS) {
+        proposed <- current_intention;
+    }
+
+    // Inertia: keep gold pursuit for a few ticks unless danger appears
+    if (current_intention = I_GET_GOLD
+        and proposed = I_PATROL
+        and intention_age < INTENTION_MIN_GOLD_TICKS
+        and (length(glow_mem_pos) > 0 or collect_persist > 0)) {
+        proposed <- I_GET_GOLD;
+    }
+
+    if (proposed != current_intention) {
+        current_intention <- proposed;
+        intention_age <- 0;
+    } else {
+        intention_age <- intention_age + 1;
+    }
+}
+
+action plan_escape_pit_one_step {
+
+    if (current_cell = nil) { return; }
+
+    // Mark the cell we are escaping from to discourage re-entry
+    point bad <- { int(current_cell.grid_x), int(current_cell.grid_y) };
+    do add_forbidden_cell(bad);
+
+    // Reactive "undo last movement" (spec requirement)
+    if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
+        do move_to_cell(last_cell);
+    } else {
+        do move_patrol_safe_one_step;
+    }
+}
+
+action plan_escape_wumpus_one_step {
+
+    if (current_cell = nil) { return; }
+
+    point bad <- { int(current_cell.grid_x), int(current_cell.grid_y) };
+    do add_forbidden_cell(bad);
+
+    // Same reactive undo as pits; safer than stepping into unknown neighbors under stench
+    if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
+        do move_to_cell(last_cell);
+    } else {
+        do move_patrol_safe_one_step;
+    }
+}
+
+action execute_current_intention_one_step {
+
+    if (!alive) { return; }
+
+    if (current_intention = I_ESCAPE_PIT) {
+        do plan_escape_pit_one_step;
+    } else if (current_intention = I_ESCAPE_WUMPUS) {
+        do plan_escape_wumpus_one_step;
+    } else if (current_intention = I_GET_GOLD) {
+        do move_collect_gold_one_step;
+    } else {
+        do move_patrol_safe_one_step;
+    }
+}
+
+action bdi_cycle_step {
+    do perceive_and_revise_beliefs;
+    do update_desires_from_beliefs;
+    do select_and_update_intention;
+    do execute_current_intention_one_step;
+}
+    
 
     // One reflex does both: perceive first, then move
 // ------------------------------
@@ -1493,30 +1708,11 @@ init {
 // SECTION 7: Plans per intention (priority handled by desire strengths)
 // Each plan: perceive -> revise beliefs -> update desires -> act
 // ------------------------------
-plan avoid_hazards intention: wants_avoid_wumpus {
+plan bdi_cycle intention: wants_patrol {
     if (alive and (not is_tester)) {
-        do perceive_and_revise_beliefs;
-        do update_desires_from_beliefs;
-        do move_avoid_hazard_one_step;
+        do bdi_cycle_step;
     }
 }
-
-plan collect_gold intention: wants_collect_gold {
-    if (alive and (not is_tester)) {
-        do perceive_and_revise_beliefs;
-        do update_desires_from_beliefs;
-        do move_collect_gold_one_step;
-    }
-}
-
-plan patrol intention: wants_patrol {
-    if (alive and (not is_tester)) {
-        do perceive_and_revise_beliefs;
-        do update_desires_from_beliefs;
-        do move_patrol_safe_one_step;
-    }
-}
-
 
     // ------------------------------
     // (kept): appearance
