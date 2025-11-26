@@ -412,6 +412,156 @@ global {
         write ("UNIT TESTS FINISHED — new failures: " + string(failed_now));
         write "--------------------------------------------";
     }
+    
+    // ======================================================
+// UNIT TESTS — SECTION 7 (Desires)
+// ======================================================
+action run_bdi_desire_unit_tests {
+
+    write "--------------------------------------------";
+    write "RUNNING UNIT TESTS — Section 7 (Desires)";
+    write "--------------------------------------------";
+
+    int failed_before <- tests_failed;
+
+    // Pick a robust "center" cell (works for any grid >= 2x2)
+    int cx <- max(1, int(grid_width / 2));
+    int cy <- max(1, int(grid_height / 2));
+
+    if (cx >= grid_width)  { cx <- grid_width - 1; }
+    if (cy >= grid_height) { cy <- grid_height - 1; }
+
+    gworld center <- gworld grid_at {cx, cy};
+    if (center = nil) {
+        do assert_true(false, "Section 7 tests skipped: could not get a center grid cell.");
+        return;
+    }
+
+    // Create a dedicated tester agent (won't execute plans)
+    create player number: 1 {
+        is_tester <- true;
+        alive <- true;
+
+        spawn_cell   <- center;
+        current_cell <- center;
+        last_cell    <- center;
+
+        location <- center.location;
+    }
+
+    player t <- one_of(player where each.is_tester);
+
+    // -----------------------
+    // TEST 1: default desire = patrol only
+    // -----------------------
+    ask t {
+        desire_base <- [];
+        perc_breeze <- false;
+        perc_stench <- false;
+        perc_glow   <- false;
+
+        collect_persist <- 0;
+        avoid_persist <- 0;
+
+        glow_mem_pos <- [];
+        glow_mem_candidates <- [];
+        glow_mem_step <- [];
+
+        pit_evidence <- [];
+        wumpus_evidence <- [];
+        known_safe <- [];
+        recent_positions <- [];
+
+        do update_desires_from_beliefs;
+    }
+
+    do assert_true(length(t.desire_base where (each.predicate = wants_patrol)) > 0,
+        "Default: wants_patrol is present");
+    do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) = 0,
+        "Default: wants_collect_gold is not active");
+    do assert_true(length(t.desire_base where (each.predicate = wants_avoid_wumpus)) = 0,
+        "Default: wants_avoid_wumpus is not active");
+
+    // -----------------------
+    // TEST 2: glow activates collect_gold (when no danger)
+    // -----------------------
+    ask t {
+        perc_breeze <- false;
+        perc_stench <- false;
+        perc_glow   <- true;
+        do update_desires_from_beliefs;
+    }
+
+    do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) > 0,
+        "Glow: wants_collect_gold becomes active");
+    do assert_true(length(t.desire_base where (each.predicate = wants_avoid_wumpus)) = 0,
+        "Glow only: wants_avoid_wumpus stays inactive");
+
+    // -----------------------
+    // TEST 3: memory-based collect_gold (no glow now, but glow_mem exists)
+    // -----------------------
+    ask t {
+        perc_glow <- false;
+        glow_mem_pos <- glow_mem_pos + [{cx, cy}];
+        do update_desires_from_beliefs;
+    }
+
+    do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) > 0,
+        "Glow memory: wants_collect_gold remains active even without current glow");
+
+    // -----------------------
+    // TEST 4: danger overrides collect (priority policy)
+    // -----------------------
+    ask t {
+        perc_glow <- true;
+        perc_breeze <- true;   // danger cue
+        perc_stench <- false;
+        do update_desires_from_beliefs;
+    }
+
+    do assert_true(length(t.desire_base where (each.predicate = wants_avoid_wumpus)) > 0,
+        "Breeze+Glow: wants_avoid_wumpus becomes active");
+    do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) = 0,
+        "Breeze+Glow: wants_collect_gold is suppressed by danger priority");
+
+    // -----------------------
+    // TEST 5: patrol next-cell selection avoids a highly risky neighbor
+    // Build a controlled case: two safe neighbors, one is made risky by evidence
+    // -----------------------
+    int east_x <- cx + 1;
+    int west_x <- cx - 1;
+
+    if (east_x < grid_width and west_x >= 0) {
+
+        ask t {
+            current_cell <- center;
+            location <- center.location;
+
+            known_safe <- [{west_x, cy}, {east_x, cy}];
+
+            // Make EAST risky: repeated evidence >= RISK_THRESHOLD
+            pit_evidence <- [{east_x, cy}, {east_x, cy}];
+
+            do select_patrol_next_cell;
+        }
+
+        do assert_true(t.patrol_next_cell != nil, "Patrol selection returns a next cell");
+        do assert_true(int(t.patrol_next_cell.grid_x) = west_x and int(t.patrol_next_cell.grid_y) = cy,
+            "Patrol selection avoids risky neighbor (chooses WEST in this controlled setup)");
+
+    } else {
+        write "[INFO] Patrol selection test skipped (grid too small for east+west neighbors).";
+    }
+
+    // Cleanup tester
+    ask t { do die; }
+
+    int failed_now <- tests_failed - failed_before;
+    write "--------------------------------------------";
+    write ("UNIT TESTS FINISHED — new failures: " + string(failed_now));
+    write "--------------------------------------------";
+}
+    
 	
 	
 
@@ -440,6 +590,7 @@ global {
 
         // ----- BDI Belief tests (Section 6) -----
         do run_bdi_belief_unit_tests;
+        do run_bdi_desire_unit_tests;
 
         if (tests_failed = 0) {
             write "All tests PASSED";
@@ -1006,6 +1157,257 @@ species player skills: [moving] control: simple_bdi {
 	
 	    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
 	}
+	
+	// ======================================================
+// SECTION 7: DESIRES (activation, persistence, priority)
+// ======================================================
+int RISK_THRESHOLD <- 2;              // evidence count >= 2 => "too risky"
+int COLLECT_PERSIST_TICKS <- 3;       // keep collect desire active for a few ticks
+int AVOID_PERSIST_TICKS   <- 1;       // keep avoid desire active for at least 1 extra tick
+
+int collect_persist <- 0;
+int avoid_persist   <- 0;
+
+// helper output for tests / debugging
+gworld patrol_next_cell <- nil;
+
+// --- helper: add/remove a desire cleanly (avoid duplicates)
+action set_desire (predicate pr, bool active, float strength_val) {
+
+    // Remove any existing instance of that desire
+    desire_base <- desire_base where (each.predicate != pr);
+
+    // Add it back only if active
+    if (active) {
+        do add_desire(predicate: pr, strength: strength_val);
+    }
+}
+
+// --- helper: compute local max risks from stored evidence (even when no cue this tick)
+action compute_local_risks_from_evidence (point here) {
+
+    do compute_neighbors4(here);
+    list<point> neigh <- neighbors4_tmp;
+
+    risk_pit <- 0;
+    risk_wumpus <- 0;
+
+    loop p over: neigh {
+        int pit_cnt <- length(pit_evidence where (each = p));
+        int w_cnt   <- length(wumpus_evidence where (each = p));
+
+        if (pit_cnt > risk_pit) { risk_pit <- pit_cnt; }
+        if (w_cnt   > risk_wumpus) { risk_wumpus <- w_cnt; }
+    }
+}
+
+// --- SECTION 7 CORE: beliefs -> desires mapping + prioritization
+action update_desires_from_beliefs {
+
+    if (current_cell = nil) { return; }
+
+    // persistence bookkeeping
+    if (perc_glow) { collect_persist <- COLLECT_PERSIST_TICKS; }
+    else if (collect_persist > 0) { collect_persist <- collect_persist - 1; }
+
+    if (perc_breeze or perc_stench) { avoid_persist <- AVOID_PERSIST_TICKS; }
+    else if (avoid_persist > 0) { avoid_persist <- avoid_persist - 1; }
+
+    point here <- { int(current_cell.grid_x), int(current_cell.grid_y) };
+
+    // compute risk from evidence lists
+    do compute_local_risks_from_evidence(here);
+
+    // --- activation conditions
+    bool danger_active <- (perc_breeze or perc_stench)
+                        or (avoid_persist > 0)
+                        or (risk_pit >= RISK_THRESHOLD)
+                        or (risk_wumpus >= RISK_THRESHOLD);
+
+    bool collect_active <- (!danger_active)
+                        and (perc_glow or (length(glow_mem_pos) > 0) or (collect_persist > 0));
+
+    // --- priorities via desire strengths: Avoid > Collect > Patrol
+    float s_avoid  <- danger_active  ? 1.0 : 0.0;
+    float s_collect<- collect_active ? 0.8 : 0.0;
+
+    // patrol always exists as fallback, but weaker if other goals are active
+    float s_patrol <- (danger_active or collect_active) ? 0.1 : 0.4;
+
+    // enforce the policy in the desire base
+    do set_desire(wants_avoid_wumpus, danger_active, s_avoid);
+
+    // IMPORTANT: when danger is active, suppress collect_gold completely (no oscillation)
+    do set_desire(wants_collect_gold, collect_active, s_collect);
+
+    do set_desire(wants_patrol, true, s_patrol);
+}
+
+// ======================================================
+// SECTION 7: PATROL PLAN (safe exploration step)
+// ======================================================
+action select_patrol_next_cell {
+
+    patrol_next_cell <- nil;
+
+    if (current_cell = nil) { return; }
+
+    list<gworld> neigh <- current_cell.neighbors;
+    if (length(neigh) = 0) { return; }
+
+    list<gworld> safe_not_recent <- [];
+    list<gworld> safe_any <- [];
+    list<gworld> acceptable <- [];
+
+    loop c over: neigh {
+
+        point p <- { int(c.grid_x), int(c.grid_y) };
+
+        int pit_cnt <- length(pit_evidence where (each = p));
+        int w_cnt   <- length(wumpus_evidence where (each = p));
+        bool too_risky <- (pit_cnt >= RISK_THRESHOLD) or (w_cnt >= RISK_THRESHOLD);
+
+        if (!too_risky) {
+            acceptable <- acceptable + [c];
+        }
+
+        if ((known_safe contains p) and !too_risky) {
+            safe_any <- safe_any + [c];
+            if (!(recent_positions contains p)) {
+                safe_not_recent <- safe_not_recent + [c];
+            }
+        }
+    }
+
+    // prefer: safe & not recent
+    if (length(safe_not_recent) > 0) {
+        patrol_next_cell <- one_of(safe_not_recent);
+        return;
+    }
+
+    // else: safe
+    if (length(safe_any) > 0) {
+        patrol_next_cell <- one_of(safe_any);
+        return;
+    }
+
+    // else: acceptable (not "too risky")
+    if (length(acceptable) > 0) {
+        patrol_next_cell <- one_of(acceptable);
+        return;
+    }
+
+    // else: all risky => choose least risky neighbor (controlled risk)
+    gworld best <- neigh[0];
+    int best_score <- 999999;
+
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        int pit_cnt <- length(pit_evidence where (each = p));
+        int w_cnt   <- length(wumpus_evidence where (each = p));
+        int score <- pit_cnt + w_cnt;
+
+        if (score < best_score) {
+            best <- c;
+            best_score <- score;
+        }
+    }
+
+    patrol_next_cell <- best;
+}
+
+action move_to_cell (gworld dest) {
+
+    if (!alive) { return; }
+    if (current_cell = nil) { return; }
+    if (dest = nil) { return; }
+
+    // compute move label BEFORE updating current_cell
+    gworld from <- current_cell;
+
+    prev_pos <- location;
+
+    int dx <- int(dest.grid_x) - int(from.grid_x);
+    int dy <- int(dest.grid_y) - int(from.grid_y);
+
+    if (dx = 1) { last_move <- "E"; }
+    else if (dx = -1) { last_move <- "W"; }
+    else if (dy = 1) { last_move <- "S"; }
+    else if (dy = -1) { last_move <- "N"; }
+    else { last_move <- "none"; }
+
+    last_cell <- from;
+    current_cell <- dest;
+
+    do goto target: dest.location;
+    location <- dest.location;
+
+    steps <- steps + 1;
+
+    if (debug_player) {
+        write "Player step " + steps + " -> " + location;
+    }
+
+    do check_lethal_cell;
+}
+
+action move_patrol_safe_one_step {
+    do select_patrol_next_cell;
+    if (patrol_next_cell != nil) {
+        do move_to_cell(patrol_next_cell);
+    }
+}
+
+// Minimal “collect” behavior for Section 7 (just bias movement near glow cues)
+action move_collect_gold_one_step {
+
+    if (current_cell = nil) { return; }
+
+    // Target points: current glow candidates, else last remembered glow candidates
+    list<point> targets <- [];
+
+    if (perc_glow) {
+        targets <- cand_gold;
+    } else if (length(glow_mem_candidates) > 0) {
+        targets <- glow_mem_candidates[length(glow_mem_candidates) - 1];
+    }
+
+    list<gworld> neigh <- current_cell.neighbors;
+
+    list<gworld> preferred <- [];
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        if (targets contains p) { preferred <- preferred + [c]; }
+    }
+
+    // Filter preferred by risk threshold
+    list<gworld> preferred_safe <- [];
+    loop c over: preferred {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        int pit_cnt <- length(pit_evidence where (each = p));
+        int w_cnt   <- length(wumpus_evidence where (each = p));
+        if (pit_cnt < RISK_THRESHOLD and w_cnt < RISK_THRESHOLD) {
+            preferred_safe <- preferred_safe + [c];
+        }
+    }
+
+    if (length(preferred_safe) > 0) {
+        do move_to_cell(one_of(preferred_safe));
+    } else {
+        do move_patrol_safe_one_step;
+    }
+}
+
+// Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
+action move_avoid_hazard_one_step {
+    if (current_cell = nil) { return; }
+    if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
+        do move_to_cell(last_cell);
+    } else {
+        do move_patrol_safe_one_step;
+    }
+}
+	
 
     // ------------------------------
     // (kept): respawn + death check
@@ -1078,20 +1480,43 @@ species player skills: [moving] control: simple_bdi {
 // ------------------------------
 // BDI bootstrap: initial desire
 // ------------------------------
+// ------------------------------
+// SECTION 7: BDI bootstrap (default desire set)
+// ------------------------------
 init {
-    // Simple baseline: just patrol (random walk)
-    do add_desire(predicate: wants_patrol, strength: 1.0);
+    // patrol exists as fallback; strengths are re-set each tick by update_desires_from_beliefs
+    do add_desire(predicate: wants_patrol, strength: 0.4);
+    do update_desires_from_beliefs;
 }
 
 // ------------------------------
-// BDI perception (runs each tick in simple_bdi)
+// SECTION 7: Plans per intention (priority handled by desire strengths)
+// Each plan: perceive -> revise beliefs -> update desires -> act
 // ------------------------------
+plan avoid_hazards intention: wants_avoid_wumpus {
+    if (alive and (not is_tester)) {
+        do perceive_and_revise_beliefs;
+        do update_desires_from_beliefs;
+        do move_avoid_hazard_one_step;
+    }
+}
+
+plan collect_gold intention: wants_collect_gold {
+    if (alive and (not is_tester)) {
+        do perceive_and_revise_beliefs;
+        do update_desires_from_beliefs;
+        do move_collect_gold_one_step;
+    }
+}
+
 plan patrol intention: wants_patrol {
     if (alive and (not is_tester)) {
         do perceive_and_revise_beliefs;
-        do move_randomly_one_step;
+        do update_desires_from_beliefs;
+        do move_patrol_safe_one_step;
     }
 }
+
 
     // ------------------------------
     // (kept): appearance
