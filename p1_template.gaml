@@ -1,27 +1,23 @@
 /**
- * Name: Practice 1 Wumpus - Environment + Basic Player + Tests
- * Author: Based on template by Raúl Fraile
+ * Name: Wumpus
+ * Author: Cristian Andrés Córdoba Silvestre
  */
 
 model Wumpus_template
 
 global {
 
-    // ---------- PARAMETERS FOR THE ENVIRONMENT ----------
-
-    int grid_width <- 8;     // can be changed from the experiment
+    int grid_width <- 8;     
     int grid_height <- 8;
 
     int nb_gold <- 4;          // number of treasures (only used in random maps)
-    int nb_pits <- 6;          // number of pits     (only used in random maps)
+    int nb_pits <- 3;          // number of pits     (only used in random maps)
 
     bool use_random_map <- true;   // false = use the predefined example map
 
-    // ---------- PLAYER PARAMETERS (SECTION 5) ----------
 
     bool debug_player <- true;     // set true to print each move to the console
 
-    // ---------- BDI PREDICATES (global symbols) ----------
     string P_WANTS_PATROL       <- "wants_patrol";
     string P_WANTS_COLLECT_GOLD <- "wants_collect_gold";
     string P_WANTS_AVOID_WUMPUS <- "wants_avoid_wumpus";
@@ -30,69 +26,216 @@ global {
     string P_NEAR_GOLD   <- "near_gold";
     string P_NEAR_WUMPUS <- "near_wumpus";
 
-    // Desire-related predicates required by the practice
     predicate wants_patrol       <- new_predicate(P_WANTS_PATROL);
     predicate wants_collect_gold <- new_predicate(P_WANTS_COLLECT_GOLD);
     predicate wants_avoid_wumpus <- new_predicate(P_WANTS_AVOID_WUMPUS);
 
-    // Transient perception predicates (near_x)
     predicate near_pit    <- new_predicate(P_NEAR_PIT);
     predicate near_gold   <- new_predicate(P_NEAR_GOLD);
     predicate near_wumpus <- new_predicate(P_NEAR_WUMPUS);
 	
 
 
-    // ---------- BOOKKEEPING FOR TESTS ----------
 
     bool tests_executed <- false;
     int  tests_failed   <- 0;
+    
+    bool tests_running <- false;
 
-    // ---------- INITIALIZATION ----------
+bool   game_finished <- false;
+int    total_gold_init <- 0;
 
-    init {
-        do setup_world;
-        do setup_player;            // <-- Section 5: create + place player
-        do run_unit_tests;          // run tests automatically on each reset
+string end_outcome <- "";          // "VICTORY" | "GAME OVER"
+string end_reason  <- "";          // "all_gold_collected" | "pit" | "wumpus"
+
+int    end_cycle <- 0;
+int    end_steps <- 0;
+
+int    end_gold_total     <- 0;
+int    end_gold_collected <- 0;
+
+point  end_cell <- {0,0};
+string end_intention <- "";
+
+int end_known_safe     <- 0;
+int end_forbidden      <- 0;
+int end_pit_evidence   <- 0;
+int end_wumpus_evidence<- 0;
+
+bool   auto_run_tests      <- true;   // set false in batch experiment
+bool   pause_on_end        <- true;   // set false in batch experiment
+bool   evaluation_enabled  <- false;  // set true in batch experiment
+
+int    max_cycles          <- 5000;   // timeout per run
+string metrics_file        <- "results/wumpus_metrics.csv";
+
+// extra per-run metrics (copied from player at end_game)
+int end_breeze_ticks            <- 0;
+int end_stench_ticks            <- 0;
+int end_blocked_pit_moves       <- 0;
+int end_blocked_wumpus_moves    <- 0;
+
+action reset_end_state {
+    game_finished <- false;
+
+    end_outcome <- "";
+    end_reason  <- "";
+
+    end_cycle <- 0;
+    end_steps <- 0;
+
+    end_gold_total     <- total_gold_init;
+    end_gold_collected <- 0;
+
+    end_cell <- {0,0};
+    end_intention <- "";
+
+    end_known_safe      <- 0;
+    end_forbidden       <- 0;
+    end_pit_evidence    <- 0;
+    end_wumpus_evidence <- 0;
+}
+
+action end_game (string outcome, string reason) {
+
+    if (game_finished) { return; }
+
+    game_finished <- true;
+
+    end_outcome <- outcome;
+    end_reason  <- reason;
+
+    end_cycle <- cycle;
+
+    end_gold_total     <- total_gold_init;
+    end_gold_collected <- total_gold_init - length(goldArea);
+
+    player p <- one_of(player where (!each.is_tester));
+    if (p != nil) {
+
+        end_steps <- p.steps;
+
+        if (p.current_cell != nil) {
+            end_cell <- { int(p.current_cell.grid_x), int(p.current_cell.grid_y) };
+        } else {
+            end_cell <- { int(p.location.x), int(p.location.y) };
+        }
+
+        end_intention <- p.current_intention;
+
+        end_known_safe      <- length(p.known_safe);
+        end_forbidden       <- length(p.forbidden_cells);
+        end_pit_evidence    <- length(p.pit_evidence);
+        end_wumpus_evidence <- length(p.wumpus_evidence);
     }
 
-    // ============================================================
-    //                 WORLD BUILD / RESET
-    // ============================================================
+    do pause;
+}
+
+action log_metrics_row {
+    if (!evaluation_enabled) { return; }
+
+    map<string, unknown> row <- [
+        "grid_w"::grid_width,
+        "grid_h"::grid_height,
+        "nb_pits"::nb_pits,
+        "nb_gold"::nb_gold,
+        "use_random_map"::use_random_map,
+
+        "outcome"::end_outcome,          // VICTORY | GAME OVER | TIMEOUT
+        "reason"::end_reason,            // all_gold_collected | pit | wumpus | max_cycles_reached
+
+        "cycle"::end_cycle,
+        "steps"::end_steps,
+
+        "gold_total"::end_gold_total,
+        "gold_collected"::end_gold_collected,
+        "gold_per_step"::((end_steps > 0) ? (float(end_gold_collected) / float(end_steps)) : 0.0),
+
+        "breeze_ticks"::end_breeze_ticks,
+        "stench_ticks"::end_stench_ticks,
+
+        "blocked_pit_moves"::end_blocked_pit_moves,
+        "blocked_wumpus_moves"::end_blocked_wumpus_moves,
+
+        "known_safe"::end_known_safe,
+        "forbidden"::end_forbidden,
+        "pit_evidence"::end_pit_evidence,
+        "wumpus_evidence"::end_wumpus_evidence
+    ];
+
+    // Appends 1 row per run; header written only if file does not exist.
+    save row to: file(metrics_file) format: "csv" header: true rewrite: false;
+}
+
+reflex timeout_end when: (!tests_running) and (!game_finished) and (cycle >= max_cycles) {
+    do end_game("TIMEOUT", "max_cycles_reached");
+}
+
+
+reflex check_end_conditions when: (!tests_running) and (!game_finished) {
+
+    player p <- one_of(player where (!each.is_tester));
+
+    // 1) Death => GAME OVER (priority)
+    if (p != nil and !p.alive) {
+        do end_game("GAME OVER", p.death_cause);
+        return;
+    }
+
+    // 2) All gold collected => VICTORY
+    if (length(goldArea) = 0) {
+        do end_game("VICTORY", "all_gold_collected");
+        return;
+    }
+}
+
+
+init {
+    do setup_world;
+    do setup_player;
+
+    if (auto_run_tests) {
+        do run_unit_tests;
+    }
+}
+
 
     // Create / reset the whole environment (grid contents & percept flags)
-    action setup_world {
+	action setup_world {
+	
+	    // 1) Reset per-cell attributes in the grid
+	    ask gworld {
+	        has_pit     <- false;
+	        has_wumpus  <- false;
+	        has_gold    <- false;
+	
+	        breeze <- false;
+	        stench <- false;
+	        glow   <- false;
+	    }
+	
+	    // 2) Remove any previous environment objects (useful on reset)
+	    ask player      { do die; }
+	    ask goldArea    { do die; }
+	    ask glitterArea { do die; }
+	    ask wumpusArea  { do die; }
+	    ask odorArea    { do die; }
+	    ask pitArea     { do die; }
+	    ask breezeArea  { do die; }
+	
+	    // 3) Build either a random map or a fixed test map
+	    if use_random_map {
+	        do setup_random_map;
+	    } else {
+	        do setup_predefined_map;
+	    }
+	
+	    // 4) End-game bookkeeping (MUST be after the map is created)
+	    total_gold_init <- length(goldArea);
+	    do reset_end_state;
+	}
 
-        // 1) Reset per-cell attributes in the grid
-        ask gworld {
-            has_pit     <- false;
-            has_wumpus  <- false;
-            has_gold    <- false;
-
-            breeze <- false;
-            stench <- false;
-            glow   <- false;
-        }
-
-        // 2) Remove any previous environment objects (useful on reset)
-        ask player      { do die; }     // <-- ensure we never accumulate players
-        ask goldArea    { do die; }
-        ask glitterArea { do die; }
-        ask wumpusArea  { do die; }
-        ask odorArea    { do die; }
-        ask pitArea     { do die; }
-        ask breezeArea  { do die; }
-
-        // 3) Build either a random map or a fixed test map
-        if use_random_map {
-            do setup_random_map;
-        } else {
-            do setup_predefined_map;
-        }
-    }
-
-    // ============================================================
-    //                 SECTION 5: PLAYER CREATION
-    // ============================================================
 
 action setup_player {
 
@@ -120,17 +263,17 @@ action setup_player {
         steps <- 0;
         alive <- true;
         death_cause <- "none";
+        
+        breeze_ticks <- 0;
+		stench_ticks <- 0;
+		blocked_pit_moves <- 0;
+		blocked_wumpus_moves <- 0;
     }
 
     if (debug_player) {
         write "Player created at location " + start_cell.location;
     }
 }
-
-
-    // ============================================================
-    //                 RANDOM MAP
-    // ============================================================
 
     action setup_random_map {
 
@@ -177,10 +320,6 @@ action setup_player {
         }
     }
 
-    // ============================================================
-    //                 PREDEFINED TEST MAP (SMALL EXAMPLE)
-    // ============================================================
-
     action setup_predefined_map {
 
         // Predefined coordinates require at least 5x5
@@ -220,10 +359,6 @@ action setup_player {
             ask world { do initialize_pit_percepts(place); }
         }
     }
-
-    // ============================================================
-    //                 HELPERS: UPDATE CELL CONTENT & PERCEPTS
-    // ============================================================
 
     action initialize_wumpus_percepts (gworld place) {
 
@@ -293,15 +428,7 @@ action setup_player {
         }
     }
 }
-    
 
-    // ============================================================
-    //                  "UNIT TESTS" (ENVIRONMENT + PLAYER)
-    // ============================================================
-
-	    // ======================================================
-    // UNIT TESTS — SECTION 6 (Beliefs)
-    // ======================================================
     action assert_true (bool cond, string msg) {
         if (!cond) {
             tests_failed <- tests_failed + 1;
@@ -355,9 +482,7 @@ action setup_player {
 		    self.belief_base <- [];
 		}
 
-        // -----------------------
         // TEST 1: recent_positions bounded queue
-        // -----------------------
         ask t {
             recent_positions <- [];
             recent_positions <- recent_positions + [{0,0}];
@@ -372,9 +497,7 @@ action setup_player {
 		do assert_true(last(t.recent_positions)  = point(0,3), "recent_positions keeps newest entries");
 
 
-        // -----------------------
         // TEST 2: breeze -> pit evidence increments; no breeze clears neighbors
-        // -----------------------
         list<point> neigh <- [{4,5},{6,5},{5,4},{5,6}];
 
 		ask t {
@@ -405,9 +528,7 @@ action setup_player {
         do assert_true(length(t.belief_base where (each.predicate = near_pit)) = 0,
                        "near_pit predicate is removed when breeze=false");
 
-        // -----------------------
         // TEST 3: glow memory bounded to MAX_GLOW_MEMORY
-        // -----------------------
 		ask t {
 		    gworld c1 <- gworld grid_at {2,2};
 		    current_cell <- c1; location <- c1.location;
@@ -429,9 +550,7 @@ action setup_player {
         do assert_true(length(t.belief_base where (each.predicate = near_gold)) > 0,
                        "near_gold predicate is present after glow=true (last update)");
 
-        // -----------------------
         // TEST 4: stench toggles near_wumpus predicate
-        // -----------------------
         ask t { do update_beliefs_from_percepts(false, true, false); }
         do assert_true(length(t.belief_base where (each.predicate = near_wumpus)) > 0,
                        "near_wumpus predicate is added when stench=true");
@@ -449,9 +568,6 @@ action setup_player {
         write "--------------------------------------------";
     }
     
-    // ======================================================
-// UNIT TESTS — SECTION 7 (Desires)
-// ======================================================
 action run_bdi_desire_unit_tests {
 
     write "--------------------------------------------";
@@ -487,9 +603,7 @@ action run_bdi_desire_unit_tests {
 
     player t <- one_of(player where each.is_tester);
 
-    // -----------------------
     // TEST 1: default desire = patrol only
-    // -----------------------
     ask t {
         desire_base <- [];
         perc_breeze <- false;
@@ -518,9 +632,7 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_avoid_wumpus)) = 0,
         "Default: wants_avoid_wumpus is not active");
 
-    // -----------------------
     // TEST 2: glow activates collect_gold (when no danger)
-    // -----------------------
     ask t {
         perc_breeze <- false;
         perc_stench <- false;
@@ -533,9 +645,7 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_avoid_wumpus)) = 0,
         "Glow only: wants_avoid_wumpus stays inactive");
 
-    // -----------------------
     // TEST 3: memory-based collect_gold (no glow now, but glow_mem exists)
-    // -----------------------
     ask t {
         perc_glow <- false;
         glow_mem_pos <- glow_mem_pos + [{cx, cy}];
@@ -545,9 +655,7 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) > 0,
         "Glow memory: wants_collect_gold remains active even without current glow");
 
-    // -----------------------
     // TEST 4: danger overrides collect (priority policy)
-    // -----------------------
     ask t {
         perc_glow <- true;
         perc_breeze <- true;   // danger cue
@@ -560,10 +668,8 @@ action run_bdi_desire_unit_tests {
     do assert_true(length(t.desire_base where (each.predicate = wants_collect_gold)) = 0,
         "Breeze+Glow: wants_collect_gold is suppressed by danger priority");
 
-    // -----------------------
     // TEST 5: patrol next-cell selection avoids a highly risky neighbor
     // Build a controlled case: two safe neighbors, one is made risky by evidence
-    // -----------------------
     int east_x <- cx + 1;
     int west_x <- cx - 1;
 
@@ -598,12 +704,6 @@ action run_bdi_desire_unit_tests {
     write "--------------------------------------------";
 }
 
-// ======================================================
-// UNIT TESTS — SECTION 8 (Intentions & Plans)
-// ======================================================
-// ======================================================
-// UNIT TESTS — SECTION 8 (Intentions & Plans)
-// ======================================================
 action run_bdi_intention_unit_tests {
 
     write "--------------------------------------------";
@@ -752,42 +852,44 @@ action run_bdi_intention_unit_tests {
 	
 	
 
-    action run_unit_tests {
+action run_unit_tests {
 
-        tests_executed <- true;
-        tests_failed   <- 0;
+    tests_running <- true;
 
-        write "============================";
-        write "Running Wumpus unit tests (environment + player)...";
+    tests_executed <- true;
+    tests_failed   <- 0;
 
-        // ----- Environment tests -----
-        do test_single_wumpus;
-        do test_at_least_one_gold;
-        do test_expected_number_of_pits;
-        do test_breeze_consistency;
-        do test_stench_consistency;
-        do test_glow_consistency;
+    write "============================";
+    write "Running Wumpus unit tests (environment + player)...";
 
-        // ----- Player tests (Section 5) -----
-        do test_single_player;
-        do test_player_spawn_safe;
-        do test_player_step_is_neighbor;
-        do test_player_multiple_steps_are_neighbors;
-        do test_player_death_detection;
+    // ----- Environment tests -----
+    do test_single_wumpus;
+    do test_at_least_one_gold;
+    do test_expected_number_of_pits;
+    do test_breeze_consistency;
+    do test_stench_consistency;
+    do test_glow_consistency;
 
-        // ----- BDI Belief tests (Section 6) -----
-        do run_bdi_belief_unit_tests;
-        do run_bdi_desire_unit_tests;
-        do run_bdi_intention_unit_tests;
+    do test_single_player;
+    do test_player_spawn_safe;
+    do test_player_step_is_neighbor;
+    do test_player_multiple_steps_are_neighbors;
+    do test_player_death_detection;
 
-        if (tests_failed = 0) {
-            write "All tests PASSED";
-        } else {
-            write "Tests FAILED. Number of failed tests: " + tests_failed;
-        }
+    do run_bdi_belief_unit_tests;
+    do run_bdi_desire_unit_tests;
+    do run_bdi_intention_unit_tests;
 
-        write "============================";
+    if (tests_failed = 0) {
+        write "All tests PASSED";
+    } else {
+        write "Tests FAILED. Number of failed tests: " + tests_failed;
     }
+
+    write "============================";
+
+    tests_running <- false;
+}
 
     // ---------------- ENVIRONMENT TESTS ----------------
 
@@ -887,7 +989,6 @@ action run_bdi_intention_unit_tests {
         }
     }
 
-    // ---------------- PLAYER TESTS (SECTION 5) ----------------
 
     // 7) Exactly one player
     action test_single_player {
@@ -1030,9 +1131,6 @@ action run_bdi_intention_unit_tests {
     }
 }
 
-// ============================================================
-//                 GRID: WUMPUS WORLD CELLS
-// ============================================================
 
 grid gworld width: grid_width height: grid_height neighbors: 4 {
 
@@ -1062,9 +1160,7 @@ grid gworld width: grid_width height: grid_height neighbors: 4 {
     }
 }
 
-// ============================================================
-//                 SPECIES: SMELLS / PERCEPTS
-// ============================================================
+// SPECIES: SMELLS / PERCEPTS
 
 species odorArea {
     aspect base {
@@ -1084,9 +1180,7 @@ species breezeArea {
     }
 }
 
-// ============================================================
 //                 SPECIES: WUMPUS, GOLD, PITS
-// ============================================================
 
 species wumpusArea {
     init { }
@@ -1104,18 +1198,10 @@ species pitArea {
     aspect base { draw square(4) color: #black border: #white; }
 }
 
-// ============================================================
-//                 SECTION 5: BASIC PLAYER AGENT
-// ============================================================
-// ============================================================
-//                 SECTION 5 + SECTION 6: BDI PLAYER
-// ============================================================
+//                BDI PLAYER
 
 species player skills: [moving] control: simple_bdi {
 
-    // ------------------------------
-    // SECTION 5 (kept): minimal state
-    // ------------------------------
     int  steps <- 0;
     bool alive <- true;
 
@@ -1125,32 +1211,19 @@ species player skills: [moving] control: simple_bdi {
     gworld current_cell <- nil;
     gworld last_cell    <- nil;
 
-    // Make sure any goto completes in a single tick for neighbor targets
     float speed <- 1000.0;
 
-    // ------------------------------
-    // SECTION 6: test helper flag
-    // ------------------------------
     bool is_tester <- false;
 
-    // ------------------------------
-    // SECTION 6: bounded memory capacities
-    // ------------------------------
     int MAX_RECENT_POS  <- 10;
     int MAX_SAFE_CELLS  <- 25;
     int MAX_EVIDENCE    <- 40;
     int MAX_GLOW_MEMORY <- 5;
 
-    // ------------------------------
-    // SECTION 6: extra self-state for later sections
-    // ------------------------------
     point  prev_pos   <- {0,0};
     string last_move  <- "none";
     int    belief_step <- 0;
 
-    // ------------------------------
-    // SECTION 6: bounded belief structures
-    // ------------------------------
     list<point> known_safe      <- [];
     list<point> recent_positions <- [];
 
@@ -1176,10 +1249,13 @@ species player skills: [moving] control: simple_bdi {
     // temp variables for helpers
     list<point> neighbors4_tmp <- [];
     int tmp_count <- 0;
+    
+    int breeze_ticks         <- 0;
+	int stench_ticks         <- 0;
+	int blocked_pit_moves    <- 0;
+	int blocked_wumpus_moves <- 0;
 
-    // ======================================================
     // Helper: compute Von Neumann neighbors (4-neighborhood)
-    // ======================================================
     action compute_neighbors4 (point p) {
         list<point> n <- [];
         int x <- int(p.x);
@@ -1193,9 +1269,7 @@ species player skills: [moving] control: simple_bdi {
         neighbors4_tmp <- n;
     }
 
-    // ======================================================
     // Helper: enforce bounded memories
-    // ======================================================
 action enforce_memory_bounds {
 
     if (length(recent_positions) > MAX_RECENT_POS) {
@@ -1226,16 +1300,12 @@ action enforce_memory_bounds {
 }
 
 
-    // ======================================================
     // Helper: count evidence occurrences (suspicion score)
-    // ======================================================
     action count_in_list (list<point> L, point p) {
         tmp_count <- length(L where (each = p));
     }
 
-    // ======================================================
     // Helper: set/unset a transient BDI belief predicate
-    // ======================================================
 	action set_transient_belief (predicate pr, bool active) {
 	    if (active) {
 	        if (length(belief_base where (each.predicate = pr)) = 0) {
@@ -1246,9 +1316,6 @@ action enforce_memory_bounds {
 	    }
 	}
 
-    // ======================================================
-    // SECTION 6 CORE: update beliefs from percepts
-    // ======================================================
 action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
 
     belief_step <- belief_step + 1;
@@ -1336,29 +1403,25 @@ action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
     do set_transient_belief(near_gold, glow);
 }
 
+action perceive_and_revise_beliefs {
 
+    perc_breeze <- false;
+    perc_stench <- false;
+    perc_glow   <- false;
 
-    // ======================================================
-    // SECTION 6 REQUIRED: perception handling via `perceive`
-    // ======================================================
-	action perceive_and_revise_beliefs {
+    if (current_cell != nil) {
+        perc_breeze <- current_cell.breeze;
+        perc_stench <- current_cell.stench;
+        perc_glow   <- current_cell.glow;
+    }
+
+    if (perc_breeze) { breeze_ticks <- breeze_ticks + 1; }
+    if (perc_stench) { stench_ticks <- stench_ticks + 1; }
+
+    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
+}
+
 	
-	    perc_breeze <- false;
-	    perc_stench <- false;
-	    perc_glow   <- false;
-	
-	    if (current_cell != nil) {
-	        perc_breeze <- current_cell.breeze;
-	        perc_stench <- current_cell.stench;
-	        perc_glow   <- current_cell.glow;
-	    }
-	
-	    do update_beliefs_from_percepts(perc_breeze, perc_stench, perc_glow);
-	}
-	
-	// ======================================================
-// SECTION 7: DESIRES (activation, persistence, priority)
-// ======================================================
 int RISK_THRESHOLD <- 2;              // evidence count >= 2 => "too risky"
 int COLLECT_PERSIST_TICKS <- 3;       // keep collect desire active for a few ticks
 int AVOID_PERSIST_TICKS   <- 1;       // keep avoid desire active for at least 1 extra tick
@@ -1369,9 +1432,6 @@ int avoid_persist   <- 0;
 // helper output for tests / debugging
 gworld patrol_next_cell <- nil;
 
-// ======================================================
-// SECTION 8: INTENTIONS (explicit) + plan execution
-// ======================================================
 string I_ESCAPE_PIT    <- "I_ESCAPE_PIT";
 string I_ESCAPE_WUMPUS <- "I_ESCAPE_WUMPUS";
 string I_GET_GOLD      <- "I_GET_GOLD";
@@ -1419,7 +1479,6 @@ action compute_local_risks_from_evidence (point here) {
     }
 }
 
-// --- SECTION 7 CORE: beliefs -> desires mapping + prioritization
 action update_desires_from_beliefs {
 
     if (current_cell = nil) { return; }
@@ -1461,9 +1520,6 @@ action update_desires_from_beliefs {
     do set_desire(wants_patrol, true, s_patrol);
 }
 
-// ======================================================
-// SECTION 7: PATROL PLAN (safe exploration step)
-// ======================================================
 action select_patrol_next_cell {
 
     patrol_next_cell <- nil;
@@ -1523,7 +1579,6 @@ action move_to_cell (gworld dest) {
 
     point dest_p <- { int(dest.grid_x), int(dest.grid_y) };
 
-    // STRICT SAFETY: never enter an UNKNOWN cell if we have ANY pit/wumpus evidence on it
     bool is_unknown_cell <- !(known_safe contains dest_p);
     bool is_gold_cell <- dest.has_gold;
 
@@ -1537,6 +1592,9 @@ action move_to_cell (gworld dest) {
         if (debug_player) {
             write "BLOCKED MOVE to " + dest.location + " (unknown + evidence: pit=" + string(pit_cnt) + ", wumpus=" + string(w_cnt) + ")";
         }
+        
+        if (pit_cnt > 0) { blocked_pit_moves <- blocked_pit_moves + 1; }
+		if (w_cnt > 0)   { blocked_wumpus_moves <- blocked_wumpus_moves + 1; }
         return;
     }
 
@@ -1579,7 +1637,6 @@ action move_patrol_safe_one_step {
     }
 }
 
-// Minimal “collect” behavior for Section 7 (just bias movement near glow cues)
 action move_collect_gold_one_step {
 
     if (current_cell = nil) { return; }
@@ -1607,7 +1664,6 @@ action move_collect_gold_one_step {
         bool target_ok <- (targets contains p) or c.has_gold;
         bool safe_ok   <- (known_safe contains p) or c.has_gold;
 
-        // forbidden only applies to unknown/suspected cells
         bool is_forbidden <- (forbidden_cells contains p) and !(known_safe contains p);
 
         if (target_ok and safe_ok and !is_forbidden) {
@@ -1631,7 +1687,6 @@ action move_collect_gold_one_step {
 
 
 
-// Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
 action move_avoid_hazard_one_step {
 
     if (current_cell = nil) { return; }
@@ -1649,9 +1704,6 @@ action move_avoid_hazard_one_step {
 }
 	
 
-    // ------------------------------
-    // (kept): respawn + death check
-    // ------------------------------
     action respawn {
         if (spawn_cell != nil) {
             steps <- 0;
@@ -1661,6 +1713,10 @@ action move_avoid_hazard_one_step {
             current_cell <- spawn_cell;
             last_cell <- spawn_cell;
             location <- spawn_cell.location;
+            breeze_ticks <- 0;
+			stench_ticks <- 0;
+			blocked_pit_moves <- 0;
+			blocked_wumpus_moves <- 0;
         }
     }
 
@@ -1678,9 +1734,6 @@ action move_avoid_hazard_one_step {
         }
     }
 
-    // ------------------------------
-    // (kept): random movement baseline
-    // ------------------------------
     action move_randomly_one_step {
 
         if (!alive) { return; }
@@ -1691,7 +1744,6 @@ action move_avoid_hazard_one_step {
 
         gworld next_cell <- one_of(neigh);
 
-        // store previous position + move label (for later sections)
         prev_pos <- location;
         int dx <- int(next_cell.location.x) - int(current_cell.location.x);
         int dy <- int(next_cell.location.y) - int(current_cell.location.y);
@@ -1825,8 +1877,43 @@ action plan_escape_pit_one_step {
 
     if (current_cell = nil) { return; }
 
-    // Always backtrack to known-safe last_cell (even if it was previously "forbidden")
-    if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
+    // Detect A<->B oscillation from position history
+    bool in_2cycle <- false;
+    if (length(recent_positions) >= 3) {
+        list<point> tail3 <- last(3, recent_positions);
+        if (length(tail3) = 3 and tail3[0] = tail3[2]) { in_2cycle <- true; }
+    }
+
+    bool last_is_danger <- false;
+    if (last_cell != nil) { last_is_danger <- last_cell.breeze or last_cell.stench; }
+
+    // If backtracking keeps us in danger OR we are in a 2-cycle, try another known-safe neighbor first
+    bool avoid_backtrack <- in_2cycle or (perc_breeze and last_is_danger);
+
+    list<gworld> safe_no_cues <- [];
+    list<gworld> safe_any <- [];
+
+    list<gworld> neigh <- current_cell.neighbors;
+
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        if (known_safe contains p) {
+
+            // Skip immediate backtrack only if we have an oscillation-risk
+            if (avoid_backtrack and last_cell != nil and c = last_cell) {
+                // do nothing
+            } else {
+                safe_any <- safe_any + [c];
+                if (!(c.breeze or c.stench)) { safe_no_cues <- safe_no_cues + [c]; }
+            }
+        }
+    }
+
+    if (length(safe_no_cues) > 0) { do move_to_cell(one_of(safe_no_cues)); return; }
+    if (length(safe_any) > 0)     { do move_to_cell(one_of(safe_any));     return; }
+
+    // Fallback: backtrack to known-safe last_cell
+    if (last_cell != nil and (last_cell in neigh) and (last_cell != current_cell)) {
         point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
         if (known_safe contains back_p) {
             do move_to_cell(last_cell);
@@ -1836,14 +1923,50 @@ action plan_escape_pit_one_step {
 
     do move_patrol_safe_one_step;
 }
+
 
 
 action plan_escape_wumpus_one_step {
 
     if (current_cell = nil) { return; }
 
-    // Always backtrack to known-safe last_cell (even if it was previously "forbidden")
-    if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
+    // Detect A<->B oscillation from position history
+    bool in_2cycle <- false;
+    if (length(recent_positions) >= 3) {
+        list<point> tail3 <- last(3, recent_positions);
+        if (length(tail3) = 3 and tail3[0] = tail3[2]) { in_2cycle <- true; }
+    }
+
+    bool last_is_danger <- false;
+    if (last_cell != nil) { last_is_danger <- last_cell.breeze or last_cell.stench; }
+
+    // If backtracking keeps us in danger OR we are in a 2-cycle, try another known-safe neighbor first
+    bool avoid_backtrack <- in_2cycle or (perc_stench and last_is_danger);
+
+    list<gworld> safe_no_cues <- [];
+    list<gworld> safe_any <- [];
+
+    list<gworld> neigh <- current_cell.neighbors;
+
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        if (known_safe contains p) {
+
+            // Skip immediate backtrack only if we have an oscillation-risk
+            if (avoid_backtrack and last_cell != nil and c = last_cell) {
+                // do nothing
+            } else {
+                safe_any <- safe_any + [c];
+                if (!(c.breeze or c.stench)) { safe_no_cues <- safe_no_cues + [c]; }
+            }
+        }
+    }
+
+    if (length(safe_no_cues) > 0) { do move_to_cell(one_of(safe_no_cues)); return; }
+    if (length(safe_any) > 0)     { do move_to_cell(one_of(safe_any));     return; }
+
+    // Fallback: backtrack to known-safe last_cell
+    if (last_cell != nil and (last_cell in neigh) and (last_cell != current_cell)) {
         point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
         if (known_safe contains back_p) {
             do move_to_cell(last_cell);
@@ -1853,6 +1976,7 @@ action plan_escape_wumpus_one_step {
 
     do move_patrol_safe_one_step;
 }
+
 
 action move_to_cell_forced (gworld dest) {
 
@@ -2005,44 +2129,30 @@ action bdi_cycle_step {
 
     
 
-    // One reflex does both: perceive first, then move
-// ------------------------------
-// BDI bootstrap: initial desire
-// ------------------------------
-// ------------------------------
-// SECTION 7: BDI bootstrap (default desire set)
-// ------------------------------
 init {
     // patrol exists as fallback; strengths are re-set each tick by update_desires_from_beliefs
     do add_desire(predicate: wants_patrol, strength: 0.4);
     do update_desires_from_beliefs;
 }
 
-// ------------------------------
-// SECTION 7: Plans per intention (priority handled by desire strengths)
-// Each plan: perceive -> revise beliefs -> update desires -> act
-// ------------------------------
 plan bdi_cycle_patrol intention: wants_patrol {
-    if (alive and (not is_tester)) {
+    if (alive and (not is_tester) and (not world.game_finished)) {
         do bdi_cycle_step;
     }
 }
 
 plan bdi_cycle_collect intention: wants_collect_gold {
-    if (alive and (not is_tester)) {
+    if (alive and (not is_tester) and (not world.game_finished)) {
         do bdi_cycle_step;
     }
 }
 
 plan bdi_cycle_avoid intention: wants_avoid_wumpus {
-    if (alive and (not is_tester)) {
+    if (alive and (not is_tester) and (not world.game_finished)) {
         do bdi_cycle_step;
     }
 }
 
-    // ------------------------------
-    // (kept): appearance
-    // ------------------------------
     aspect base {
         rgb c <- #white;
 
@@ -2061,9 +2171,6 @@ plan bdi_cycle_avoid intention: wants_avoid_wumpus {
 }
 
 
-// ============================================================
-//                 EXPERIMENTS
-// ============================================================
 
 experiment Wumpus_experiment_1 type: gui {
 
@@ -2079,22 +2186,97 @@ experiment Wumpus_experiment_1 type: gui {
     parameter "Debug player movement (console spam)" var: debug_player;
 
     output {
-        display view1 {
-            grid gworld border: #darkgreen;
+display view1 {
+    grid gworld border: #darkgreen;
 
-            // background overlays
-            species breezeArea  aspect: base;
-            species odorArea    aspect: base;
-            species glitterArea aspect: base;
+    // background overlays
+    species breezeArea  aspect: base;
+    species odorArea    aspect: base;
+    species glitterArea aspect: base;
 
-            // objects
-            species pitArea     aspect: base;
-            species wumpusArea  aspect: base;
-            species goldArea    aspect: base;
+    // objects
+    species pitArea     aspect: base;
+    species wumpusArea  aspect: base;
+    species goldArea    aspect: base;
 
-            // player on top
-            species player      aspect: base;
+    // player on top
+    species player      aspect: base;
+
+    // --- END SCREENS (Victory / Game Over) ---
+graphics "end_screen_bg" position:{0,0} size:{1,1} transparency: 0.55 {
+    if (game_finished) {
+        // Full-screen overlay, always centered on the camera
+        draw rectangle(#display_width, #display_height) at: #camera_target color: #gray border: #gray;
+    }
+}
+
+graphics "end_screen_text" position:{0,0} size:{1,1} {
+
+    if (game_finished) {
+
+        point c <- #camera_target;
+
+        // Responsive panel in pixels, clamped to a fraction of the current display
+        float panel_w <- ((#display_width  * 0.80) < (640#px)) ? (#display_width  * 0.80) : (640#px);
+        float panel_h <- ((#display_height * 0.70) < (440#px)) ? (#display_height * 0.70) : (440#px);
+
+        float pad  <- 24#px;
+        float line <- 34#px;
+
+        // Card panel (centered)
+        draw rectangle(panel_w, panel_h) at: c color: #black border: #white;
+
+        // Fonts
+        font f_title <- font("Helvetica", 44, #bold);
+        font f_line  <- font("Helvetica", 22, #plain);
+        font f_small <- font("Helvetica", 18, #plain);
+
+        rgb title_col <- (end_outcome = "VICTORY") ? #chartreuse : #red;
+
+        // Layout anchors (pixel-based spacing)
+        float x <- c.x - panel_w / 2 + pad;
+        float y <- c.y + panel_h / 2 - pad;
+
+        // Title (centered)
+        draw end_outcome at: {c.x, y} anchor: #top_center font: f_title color: title_col border: #black;
+        y <- y - 66#px;
+
+        // Body (left-aligned)
+        draw ("Gold: " + string(end_gold_collected) + " / " + string(end_gold_total))
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        draw ("Steps: " + string(end_steps) + "   |   Cycle: " + string(end_cycle))
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        draw ("Final cell: " + string(end_cell))
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        draw ("Final intention: " + end_intention)
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        if (end_outcome = "GAME OVER") {
+            draw ("Cause: " + end_reason)
+                at: {x, y} anchor: #top_left font: f_line color: #white;
+            y <- y - line;
         }
+
+        draw ("Known-safe cells: " + string(end_known_safe) + "   |   Forbidden: " + string(end_forbidden))
+            at: {x, y} anchor: #top_left font: f_small color: #white;
+        y <- y - 28#px;
+
+        draw ("Evidence (pit / wumpus): " + string(end_pit_evidence) + " / " + string(end_wumpus_evidence))
+            at: {x, y} anchor: #top_left font: f_small color: #white;
+
+        // Footer (bottom centered inside the panel)
+        draw ("Simulation paused — use 'Reload experiment' to restart.")
+            at: {c.x, c.y - panel_h / 2 + pad} anchor: #bottom_center font: f_small color: #white;
+    }
+}
+}
 
         monitor "Tests executed"          value: tests_executed;
         monitor "Number of failed tests"  value: tests_failed;
@@ -2108,22 +2290,88 @@ experiment Wumpus_environment_tests type: gui {
     parameter "Use random map (otherwise predefined example)" var: use_random_map;
 
     output {
-        display tests_view {
-            grid gworld border: #gray;
+display tests_view {
+    grid gworld border: #gray;
 
-            species breezeArea  aspect: base;
-            species odorArea    aspect: base;
-            species glitterArea aspect: base;
+    species breezeArea  aspect: base;
+    species odorArea    aspect: base;
+    species glitterArea aspect: base;
 
-            species pitArea     aspect: base;
-            species wumpusArea  aspect: base;
-            species goldArea    aspect: base;
+    species pitArea     aspect: base;
+    species wumpusArea  aspect: base;
+    species goldArea    aspect: base;
 
-            species player      aspect: base;
+    species player      aspect: base;
+
+    graphics "end_screen_bg" transparency: 0.45 {
+        if (game_finished) {
+            float s <- max(grid_width, grid_height) * 20.0;
+            draw square(s) at: {grid_width / 2.0, grid_height / 2.0} color: #black border: #black;
         }
+    }
+
+    graphics "end_screen_text" {
+        if (game_finished) {
+
+            float lx <- grid_width * 0.15;
+            float base_y <- grid_height * 0.80;
+            float gap <- max(1.0, grid_height * 0.08);
+
+            rgb title_col <- (end_outcome = "VICTORY") ? #chartreuse : #red;
+
+            draw end_outcome at: {lx, base_y} size: 48 color: title_col;
+
+            draw ("Gold: " + string(end_gold_collected) + " / " + string(end_gold_total))
+                at: {lx, base_y - 1 * gap} size: 24 color: #white;
+
+            draw ("Steps: " + string(end_steps) + " | Cycle: " + string(end_cycle))
+                at: {lx, base_y - 2 * gap} size: 24 color: #white;
+
+            draw ("Final cell: " + string(end_cell) + " | Final intention: " + end_intention)
+                at: {lx, base_y - 3 * gap} size: 22 color: #white;
+
+            if (end_outcome = "GAME OVER") {
+                draw ("Cause: " + end_reason)
+                    at: {lx, base_y - 4 * gap} size: 22 color: #white;
+            }
+
+            draw ("Known-safe cells: " + string(end_known_safe) + " | Forbidden: " + string(end_forbidden))
+                at: {lx, base_y - 5 * gap} size: 20 color: #white;
+
+            draw ("Evidence (pit / wumpus): " + string(end_pit_evidence) + " / " + string(end_wumpus_evidence))
+                at: {lx, base_y - 6 * gap} size: 20 color: #white;
+
+            draw ("Simulation paused. Use 'Reload experiment' to restart.")
+                at: {lx, base_y - 7 * gap} size: 18 color: #white;
+        }
+    }
+}
 
         monitor "Tests executed"          value: tests_executed;
         monitor "Number of failed tests"  value: tests_failed;
         monitor "Player count"            value: length(player);
     }
+}
+
+
+experiment Wumpus_batch_evaluation type: batch keep_seed: false repeat: 30 until: (game_finished or cycle >= max_cycles) {
+
+    // --- test cases (edit these lists as you want) ---
+    parameter "Grid width"  var: grid_width  among: [6, 8];
+    parameter "Grid height" var: grid_height among: [6, 8];
+
+    parameter "Number of pits" var: nb_pits among: [4, 6, 8];
+    parameter "Number of gold" var: nb_gold among: [2, 4];
+
+    parameter "Use random map" var: use_random_map among: [true, false];
+
+    // --- evaluation controls ---
+    parameter "Max cycles (timeout)" var: max_cycles among: [5000];
+    parameter "Metrics CSV path"     var: metrics_file among: ["results/wumpus_metrics.csv"];
+
+    // --- make batch runs non-interactive + fast ---
+    parameter "Debug player"         var: debug_player        among: [false];
+    parameter "Auto run unit tests"  var: auto_run_tests      among: [false];
+    parameter "Pause on end"         var: pause_on_end        among: [false];
+    parameter "Enable metrics log"   var: evaluation_enabled  among: [true];
 }
