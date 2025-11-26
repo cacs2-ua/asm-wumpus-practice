@@ -46,6 +46,102 @@ global {
 
     bool tests_executed <- false;
     int  tests_failed   <- 0;
+    
+    bool tests_running <- false;
+
+bool   game_finished <- false;
+int    total_gold_init <- 0;
+
+string end_outcome <- "";          // "VICTORY" | "GAME OVER"
+string end_reason  <- "";          // "all_gold_collected" | "pit" | "wumpus"
+
+int    end_cycle <- 0;
+int    end_steps <- 0;
+
+int    end_gold_total     <- 0;
+int    end_gold_collected <- 0;
+
+point  end_cell <- {0,0};
+string end_intention <- "";
+
+int end_known_safe     <- 0;
+int end_forbidden      <- 0;
+int end_pit_evidence   <- 0;
+int end_wumpus_evidence<- 0;
+
+action reset_end_state {
+    game_finished <- false;
+
+    end_outcome <- "";
+    end_reason  <- "";
+
+    end_cycle <- 0;
+    end_steps <- 0;
+
+    end_gold_total     <- total_gold_init;
+    end_gold_collected <- 0;
+
+    end_cell <- {0,0};
+    end_intention <- "";
+
+    end_known_safe      <- 0;
+    end_forbidden       <- 0;
+    end_pit_evidence    <- 0;
+    end_wumpus_evidence <- 0;
+}
+
+action end_game (string outcome, string reason) {
+
+    if (game_finished) { return; }
+
+    game_finished <- true;
+
+    end_outcome <- outcome;
+    end_reason  <- reason;
+
+    end_cycle <- cycle;
+
+    end_gold_total     <- total_gold_init;
+    end_gold_collected <- total_gold_init - length(goldArea);
+
+    player p <- one_of(player where (!each.is_tester));
+    if (p != nil) {
+
+        end_steps <- p.steps;
+
+        if (p.current_cell != nil) {
+            end_cell <- { int(p.current_cell.grid_x), int(p.current_cell.grid_y) };
+        } else {
+            end_cell <- { int(p.location.x), int(p.location.y) };
+        }
+
+        end_intention <- p.current_intention;
+
+        end_known_safe      <- length(p.known_safe);
+        end_forbidden       <- length(p.forbidden_cells);
+        end_pit_evidence    <- length(p.pit_evidence);
+        end_wumpus_evidence <- length(p.wumpus_evidence);
+    }
+
+    do pause;
+}
+
+reflex check_end_conditions when: (!tests_running) and (!game_finished) {
+
+    player p <- one_of(player where (!each.is_tester));
+
+    // 1) Death => GAME OVER (priority)
+    if (p != nil and !p.alive) {
+        do end_game("GAME OVER", p.death_cause);
+        return;
+    }
+
+    // 2) All gold collected => VICTORY
+    if (length(goldArea) = 0) {
+        do end_game("VICTORY", "all_gold_collected");
+        return;
+    }
+}
 
     // ---------- INITIALIZATION ----------
 
@@ -60,35 +156,39 @@ global {
     // ============================================================
 
     // Create / reset the whole environment (grid contents & percept flags)
-    action setup_world {
-
-        // 1) Reset per-cell attributes in the grid
-        ask gworld {
-            has_pit     <- false;
-            has_wumpus  <- false;
-            has_gold    <- false;
-
-            breeze <- false;
-            stench <- false;
-            glow   <- false;
-        }
-
-        // 2) Remove any previous environment objects (useful on reset)
-        ask player      { do die; }     // <-- ensure we never accumulate players
-        ask goldArea    { do die; }
-        ask glitterArea { do die; }
-        ask wumpusArea  { do die; }
-        ask odorArea    { do die; }
-        ask pitArea     { do die; }
-        ask breezeArea  { do die; }
-
-        // 3) Build either a random map or a fixed test map
-        if use_random_map {
-            do setup_random_map;
-        } else {
-            do setup_predefined_map;
-        }
-    }
+	action setup_world {
+	
+	    // 1) Reset per-cell attributes in the grid
+	    ask gworld {
+	        has_pit     <- false;
+	        has_wumpus  <- false;
+	        has_gold    <- false;
+	
+	        breeze <- false;
+	        stench <- false;
+	        glow   <- false;
+	    }
+	
+	    // 2) Remove any previous environment objects (useful on reset)
+	    ask player      { do die; }
+	    ask goldArea    { do die; }
+	    ask glitterArea { do die; }
+	    ask wumpusArea  { do die; }
+	    ask odorArea    { do die; }
+	    ask pitArea     { do die; }
+	    ask breezeArea  { do die; }
+	
+	    // 3) Build either a random map or a fixed test map
+	    if use_random_map {
+	        do setup_random_map;
+	    } else {
+	        do setup_predefined_map;
+	    }
+	
+	    // 4) End-game bookkeeping (MUST be after the map is created)
+	    total_gold_init <- length(goldArea);
+	    do reset_end_state;
+	}
 
     // ============================================================
     //                 SECTION 5: PLAYER CREATION
@@ -752,42 +852,46 @@ action run_bdi_intention_unit_tests {
 	
 	
 
-    action run_unit_tests {
+action run_unit_tests {
 
-        tests_executed <- true;
-        tests_failed   <- 0;
+    tests_running <- true;
 
-        write "============================";
-        write "Running Wumpus unit tests (environment + player)...";
+    tests_executed <- true;
+    tests_failed   <- 0;
 
-        // ----- Environment tests -----
-        do test_single_wumpus;
-        do test_at_least_one_gold;
-        do test_expected_number_of_pits;
-        do test_breeze_consistency;
-        do test_stench_consistency;
-        do test_glow_consistency;
+    write "============================";
+    write "Running Wumpus unit tests (environment + player)...";
 
-        // ----- Player tests (Section 5) -----
-        do test_single_player;
-        do test_player_spawn_safe;
-        do test_player_step_is_neighbor;
-        do test_player_multiple_steps_are_neighbors;
-        do test_player_death_detection;
+    // ----- Environment tests -----
+    do test_single_wumpus;
+    do test_at_least_one_gold;
+    do test_expected_number_of_pits;
+    do test_breeze_consistency;
+    do test_stench_consistency;
+    do test_glow_consistency;
 
-        // ----- BDI Belief tests (Section 6) -----
-        do run_bdi_belief_unit_tests;
-        do run_bdi_desire_unit_tests;
-        do run_bdi_intention_unit_tests;
+    // ----- Player tests (Section 5) -----
+    do test_single_player;
+    do test_player_spawn_safe;
+    do test_player_step_is_neighbor;
+    do test_player_multiple_steps_are_neighbors;
+    do test_player_death_detection;
 
-        if (tests_failed = 0) {
-            write "All tests PASSED";
-        } else {
-            write "Tests FAILED. Number of failed tests: " + tests_failed;
-        }
+    // ----- BDI tests (Sections 6–8) -----
+    do run_bdi_belief_unit_tests;
+    do run_bdi_desire_unit_tests;
+    do run_bdi_intention_unit_tests;
 
-        write "============================";
+    if (tests_failed = 0) {
+        write "All tests PASSED";
+    } else {
+        write "Tests FAILED. Number of failed tests: " + tests_failed;
     }
+
+    write "============================";
+
+    tests_running <- false;
+}
 
     // ---------------- ENVIRONMENT TESTS ----------------
 
@@ -2095,19 +2199,19 @@ init {
 // Each plan: perceive -> revise beliefs -> update desires -> act
 // ------------------------------
 plan bdi_cycle_patrol intention: wants_patrol {
-    if (alive and (not is_tester)) {
+    if (alive and (not is_tester) and (not world.game_finished)) {
         do bdi_cycle_step;
     }
 }
 
 plan bdi_cycle_collect intention: wants_collect_gold {
-    if (alive and (not is_tester)) {
+    if (alive and (not is_tester) and (not world.game_finished)) {
         do bdi_cycle_step;
     }
 }
 
 plan bdi_cycle_avoid intention: wants_avoid_wumpus {
-    if (alive and (not is_tester)) {
+    if (alive and (not is_tester) and (not world.game_finished)) {
         do bdi_cycle_step;
     }
 }
@@ -2151,22 +2255,66 @@ experiment Wumpus_experiment_1 type: gui {
     parameter "Debug player movement (console spam)" var: debug_player;
 
     output {
-        display view1 {
-            grid gworld border: #darkgreen;
+display view1 {
+    grid gworld border: #darkgreen;
 
-            // background overlays
-            species breezeArea  aspect: base;
-            species odorArea    aspect: base;
-            species glitterArea aspect: base;
+    // background overlays
+    species breezeArea  aspect: base;
+    species odorArea    aspect: base;
+    species glitterArea aspect: base;
 
-            // objects
-            species pitArea     aspect: base;
-            species wumpusArea  aspect: base;
-            species goldArea    aspect: base;
+    // objects
+    species pitArea     aspect: base;
+    species wumpusArea  aspect: base;
+    species goldArea    aspect: base;
 
-            // player on top
-            species player      aspect: base;
+    // player on top
+    species player      aspect: base;
+
+    // --- END SCREENS (Victory / Game Over) ---
+    graphics "end_screen_bg" transparency: 0.45 {
+        if (game_finished) {
+            float s <- max(grid_width, grid_height) * 20.0;
+            draw square(s) at: {grid_width / 2.0, grid_height / 2.0} color: #black border: #black;
         }
+    }
+
+    graphics "end_screen_text" {
+        if (game_finished) {
+
+            float lx <- grid_width * 0.15;
+            float base_y <- grid_height * 0.80;
+            float gap <- max(1.0, grid_height * 0.08);
+
+            rgb title_col <- (end_outcome = "VICTORY") ? #chartreuse : #red;
+
+            draw end_outcome at: {lx, base_y} size: 48 color: title_col;
+
+            draw ("Gold: " + string(end_gold_collected) + " / " + string(end_gold_total))
+                at: {lx, base_y - 1 * gap} size: 24 color: #white;
+
+            draw ("Steps: " + string(end_steps) + " | Cycle: " + string(end_cycle))
+                at: {lx, base_y - 2 * gap} size: 24 color: #white;
+
+            draw ("Final cell: " + string(end_cell) + " | Final intention: " + end_intention)
+                at: {lx, base_y - 3 * gap} size: 22 color: #white;
+
+            if (end_outcome = "GAME OVER") {
+                draw ("Cause: " + end_reason)
+                    at: {lx, base_y - 4 * gap} size: 22 color: #white;
+            }
+
+            draw ("Known-safe cells: " + string(end_known_safe) + " | Forbidden: " + string(end_forbidden))
+                at: {lx, base_y - 5 * gap} size: 20 color: #white;
+
+            draw ("Evidence (pit / wumpus): " + string(end_pit_evidence) + " / " + string(end_wumpus_evidence))
+                at: {lx, base_y - 6 * gap} size: 20 color: #white;
+
+            draw ("Simulation paused. Use 'Reload experiment' to restart.")
+                at: {lx, base_y - 7 * gap} size: 18 color: #white;
+        }
+    }
+}
 
         monitor "Tests executed"          value: tests_executed;
         monitor "Number of failed tests"  value: tests_failed;
@@ -2180,19 +2328,62 @@ experiment Wumpus_environment_tests type: gui {
     parameter "Use random map (otherwise predefined example)" var: use_random_map;
 
     output {
-        display tests_view {
-            grid gworld border: #gray;
+display tests_view {
+    grid gworld border: #gray;
 
-            species breezeArea  aspect: base;
-            species odorArea    aspect: base;
-            species glitterArea aspect: base;
+    species breezeArea  aspect: base;
+    species odorArea    aspect: base;
+    species glitterArea aspect: base;
 
-            species pitArea     aspect: base;
-            species wumpusArea  aspect: base;
-            species goldArea    aspect: base;
+    species pitArea     aspect: base;
+    species wumpusArea  aspect: base;
+    species goldArea    aspect: base;
 
-            species player      aspect: base;
+    species player      aspect: base;
+
+    graphics "end_screen_bg" transparency: 0.45 {
+        if (game_finished) {
+            float s <- max(grid_width, grid_height) * 20.0;
+            draw square(s) at: {grid_width / 2.0, grid_height / 2.0} color: #black border: #black;
         }
+    }
+
+    graphics "end_screen_text" {
+        if (game_finished) {
+
+            float lx <- grid_width * 0.15;
+            float base_y <- grid_height * 0.80;
+            float gap <- max(1.0, grid_height * 0.08);
+
+            rgb title_col <- (end_outcome = "VICTORY") ? #chartreuse : #red;
+
+            draw end_outcome at: {lx, base_y} size: 48 color: title_col;
+
+            draw ("Gold: " + string(end_gold_collected) + " / " + string(end_gold_total))
+                at: {lx, base_y - 1 * gap} size: 24 color: #white;
+
+            draw ("Steps: " + string(end_steps) + " | Cycle: " + string(end_cycle))
+                at: {lx, base_y - 2 * gap} size: 24 color: #white;
+
+            draw ("Final cell: " + string(end_cell) + " | Final intention: " + end_intention)
+                at: {lx, base_y - 3 * gap} size: 22 color: #white;
+
+            if (end_outcome = "GAME OVER") {
+                draw ("Cause: " + end_reason)
+                    at: {lx, base_y - 4 * gap} size: 22 color: #white;
+            }
+
+            draw ("Known-safe cells: " + string(end_known_safe) + " | Forbidden: " + string(end_forbidden))
+                at: {lx, base_y - 5 * gap} size: 20 color: #white;
+
+            draw ("Evidence (pit / wumpus): " + string(end_pit_evidence) + " / " + string(end_wumpus_evidence))
+                at: {lx, base_y - 6 * gap} size: 20 color: #white;
+
+            draw ("Simulation paused. Use 'Reload experiment' to restart.")
+                at: {lx, base_y - 7 * gap} size: 18 color: #white;
+        }
+    }
+}
 
         monitor "Tests executed"          value: tests_executed;
         monitor "Number of failed tests"  value: tests_failed;
