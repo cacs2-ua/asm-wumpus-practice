@@ -1825,8 +1825,43 @@ action plan_escape_pit_one_step {
 
     if (current_cell = nil) { return; }
 
-    // Always backtrack to known-safe last_cell (even if it was previously "forbidden")
-    if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
+    // Detect A<->B oscillation from position history
+    bool in_2cycle <- false;
+    if (length(recent_positions) >= 3) {
+        list<point> tail3 <- last(3, recent_positions);
+        if (length(tail3) = 3 and tail3[0] = tail3[2]) { in_2cycle <- true; }
+    }
+
+    bool last_is_danger <- false;
+    if (last_cell != nil) { last_is_danger <- last_cell.breeze or last_cell.stench; }
+
+    // If backtracking keeps us in danger OR we are in a 2-cycle, try another known-safe neighbor first
+    bool avoid_backtrack <- in_2cycle or (perc_breeze and last_is_danger);
+
+    list<gworld> safe_no_cues <- [];
+    list<gworld> safe_any <- [];
+
+    list<gworld> neigh <- current_cell.neighbors;
+
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        if (known_safe contains p) {
+
+            // Skip immediate backtrack only if we have an oscillation-risk
+            if (avoid_backtrack and last_cell != nil and c = last_cell) {
+                // do nothing
+            } else {
+                safe_any <- safe_any + [c];
+                if (!(c.breeze or c.stench)) { safe_no_cues <- safe_no_cues + [c]; }
+            }
+        }
+    }
+
+    if (length(safe_no_cues) > 0) { do move_to_cell(one_of(safe_no_cues)); return; }
+    if (length(safe_any) > 0)     { do move_to_cell(one_of(safe_any));     return; }
+
+    // Fallback: backtrack to known-safe last_cell
+    if (last_cell != nil and (last_cell in neigh) and (last_cell != current_cell)) {
         point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
         if (known_safe contains back_p) {
             do move_to_cell(last_cell);
@@ -1836,14 +1871,50 @@ action plan_escape_pit_one_step {
 
     do move_patrol_safe_one_step;
 }
+
 
 
 action plan_escape_wumpus_one_step {
 
     if (current_cell = nil) { return; }
 
-    // Always backtrack to known-safe last_cell (even if it was previously "forbidden")
-    if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
+    // Detect A<->B oscillation from position history
+    bool in_2cycle <- false;
+    if (length(recent_positions) >= 3) {
+        list<point> tail3 <- last(3, recent_positions);
+        if (length(tail3) = 3 and tail3[0] = tail3[2]) { in_2cycle <- true; }
+    }
+
+    bool last_is_danger <- false;
+    if (last_cell != nil) { last_is_danger <- last_cell.breeze or last_cell.stench; }
+
+    // If backtracking keeps us in danger OR we are in a 2-cycle, try another known-safe neighbor first
+    bool avoid_backtrack <- in_2cycle or (perc_stench and last_is_danger);
+
+    list<gworld> safe_no_cues <- [];
+    list<gworld> safe_any <- [];
+
+    list<gworld> neigh <- current_cell.neighbors;
+
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        if (known_safe contains p) {
+
+            // Skip immediate backtrack only if we have an oscillation-risk
+            if (avoid_backtrack and last_cell != nil and c = last_cell) {
+                // do nothing
+            } else {
+                safe_any <- safe_any + [c];
+                if (!(c.breeze or c.stench)) { safe_no_cues <- safe_no_cues + [c]; }
+            }
+        }
+    }
+
+    if (length(safe_no_cues) > 0) { do move_to_cell(one_of(safe_no_cues)); return; }
+    if (length(safe_any) > 0)     { do move_to_cell(one_of(safe_any));     return; }
+
+    // Fallback: backtrack to known-safe last_cell
+    if (last_cell != nil and (last_cell in neigh) and (last_cell != current_cell)) {
         point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
         if (known_safe contains back_p) {
             do move_to_cell(last_cell);
@@ -1853,6 +1924,7 @@ action plan_escape_wumpus_one_step {
 
     do move_patrol_safe_one_step;
 }
+
 
 action move_to_cell_forced (gworld dest) {
 
