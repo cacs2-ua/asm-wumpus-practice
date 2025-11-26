@@ -1499,6 +1499,13 @@ action select_patrol_next_cell {
         }
     }
 
+    // Anti-oscillation: if there are multiple choices, do not immediately go back to last_cell
+    if (last_cell != nil) {
+        if (length(safe_not_recent) > 1) { safe_not_recent <- safe_not_recent where (each != last_cell); }
+        if (length(safe_any) > 1)        { safe_any        <- safe_any        where (each != last_cell); }
+        if (length(acceptable) > 1)      { acceptable      <- acceptable      where (each != last_cell); }
+    }
+
     if (length(safe_not_recent) > 0) {
         patrol_next_cell <- one_of(safe_not_recent);
         return;
@@ -1514,7 +1521,7 @@ action select_patrol_next_cell {
         return;
     }
 
-    // Fallback: all risky/forbidden => choose least risky
+    // Fallback: all risky/forbidden => choose least risky (strongly penalize forbidden)
     gworld best <- neigh[0];
     int best_score <- 999999;
 
@@ -1522,7 +1529,8 @@ action select_patrol_next_cell {
         point p <- { int(c.grid_x), int(c.grid_y) };
         int pit_cnt <- length(pit_evidence where (each = p));
         int w_cnt   <- length(wumpus_evidence where (each = p));
-        int score <- pit_cnt + w_cnt;
+        int forb    <- (forbidden_cells contains p) ? 1000 : 0;
+        int score <- pit_cnt + w_cnt + forb;
 
         if (score < best_score) {
             best <- c;
@@ -1532,6 +1540,7 @@ action select_patrol_next_cell {
 
     patrol_next_cell <- best;
 }
+
 
 
 action move_to_cell (gworld dest) {
@@ -1612,12 +1621,18 @@ action move_collect_gold_one_step {
         }
     }
 
+    // Anti-oscillation: if there are multiple equally good choices, avoid immediate backtrack
+    if (last_cell != nil and length(preferred_safe) > 1) {
+        preferred_safe <- preferred_safe where (each != last_cell);
+    }
+
     if (length(preferred_safe) > 0) {
         do move_to_cell(one_of(preferred_safe));
     } else {
         do move_patrol_safe_one_step;
     }
 }
+
 
 
 // Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
@@ -1826,12 +1841,16 @@ action plan_escape_wumpus_one_step {
     point bad <- { int(current_cell.grid_x), int(current_cell.grid_y) };
     do add_forbidden_cell(bad);
 
-    // Same reactive undo as pits; safer than stepping into unknown neighbors under stench
+    // Reactive "undo last movement" ONLY if it does not create a forbidden 2-cycle
     if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
-        do move_to_cell(last_cell);
-    } else {
-        do move_patrol_safe_one_step;
+        point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
+        if (!(forbidden_cells contains back_p)) {
+            do move_to_cell(last_cell);
+            return;
+        }
     }
+
+    do move_patrol_safe_one_step;
 }
 
 action execute_current_intention_one_step {
