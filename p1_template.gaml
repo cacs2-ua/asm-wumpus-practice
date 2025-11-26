@@ -592,6 +592,157 @@ action run_bdi_desire_unit_tests {
     write ("UNIT TESTS FINISHED — new failures: " + string(failed_now));
     write "--------------------------------------------";
 }
+
+// ======================================================
+// UNIT TESTS — SECTION 8 (Intentions & Plans)
+// ======================================================
+// ======================================================
+// UNIT TESTS — SECTION 8 (Intentions & Plans)
+// ======================================================
+action run_bdi_intention_unit_tests {
+
+    write "--------------------------------------------";
+    write "RUNNING UNIT TESTS — Section 8 (Intentions & Plans)";
+    write "--------------------------------------------";
+
+    int failed_before <- tests_failed;
+
+    int cx <- max(1, int(grid_width / 2));
+    int cy <- max(1, int(grid_height / 2));
+
+    if (cx >= grid_width)  { cx <- grid_width - 1; }
+    if (cy >= grid_height) { cy <- grid_height - 1; }
+
+    gworld center <- gworld grid_at {cx, cy};
+    if (center = nil) {
+        do assert_true(false, "Section 8 tests skipped: could not get a center grid cell.");
+        return;
+    }
+
+    create player number: 1 {
+        is_tester <- true;
+        alive <- true;
+
+        spawn_cell   <- center;
+        current_cell <- center;
+        last_cell    <- center;
+        location     <- center.location;
+
+        current_intention <- "I_PATROL";
+        intention_age <- 999;
+
+        forbidden_cells <- [];
+
+        desire_base <- [];
+        belief_base <- [];
+
+        perc_breeze <- false;
+        perc_stench <- false;
+        perc_glow   <- false;
+
+        collect_persist <- 0;
+        avoid_persist <- 0;
+
+        glow_mem_pos <- [];
+        glow_mem_candidates <- [];
+        glow_mem_step <- [];
+
+        pit_evidence <- [];
+        wumpus_evidence <- [];
+        known_safe <- [];
+        recent_positions <- [];
+    }
+
+    player t <- one_of(player where each.is_tester);
+
+    // TEST 1: No cues => PATROL
+    ask t {
+        current_intention <- "I_PATROL"; intention_age <- 999;
+        perc_breeze <- false; perc_stench <- false; perc_glow <- false;
+        collect_persist <- 0; avoid_persist <- 0;
+        glow_mem_pos <- []; glow_mem_candidates <- []; glow_mem_step <- [];
+        do update_desires_from_beliefs;
+        do select_intention;
+    }
+    do assert_true(t.current_intention = "I_PATROL", "No cues: current intention is I_PATROL");
+
+    // TEST 2: Glow (no danger) => GET_GOLD
+    ask t {
+        current_intention <- "I_PATROL"; intention_age <- 999;
+        perc_breeze <- false; perc_stench <- false; perc_glow <- true;
+        avoid_persist <- 0;
+        do update_desires_from_beliefs;
+        do select_intention;
+    }
+    do assert_true(t.current_intention = "I_GET_GOLD", "Glow only: current intention is I_GET_GOLD");
+
+    // TEST 3: Breeze => ESCAPE_PIT
+    ask t {
+        current_intention <- "I_PATROL"; intention_age <- 999;
+        perc_breeze <- true; perc_stench <- false; perc_glow <- false;
+        do update_desires_from_beliefs;
+        do select_intention;
+    }
+    do assert_true(t.current_intention = "I_ESCAPE_PIT", "Breeze: current intention is I_ESCAPE_PIT");
+
+    // TEST 4: Stench => ESCAPE_WUMPUS
+    // (Resetting intention avoids the escape-inertia from the previous test affecting this one.)
+    ask t {
+        current_intention <- "I_PATROL"; intention_age <- 999;
+        perc_breeze <- false; perc_stench <- true; perc_glow <- false;
+        do update_desires_from_beliefs;
+        do select_intention;
+    }
+    do assert_true(t.current_intention = "I_ESCAPE_WUMPUS", "Stench: current intention is I_ESCAPE_WUMPUS");
+
+    // TEST 5: Breeze + Stench (+Glow) => ESCAPE_WUMPUS
+    ask t {
+        current_intention <- "I_PATROL"; intention_age <- 999;
+        perc_breeze <- true; perc_stench <- true; perc_glow <- true;
+        do update_desires_from_beliefs;
+        do select_intention;
+    }
+    do assert_true(t.current_intention = "I_ESCAPE_WUMPUS",
+        "Breeze+Stench(+Glow): current intention prioritizes I_ESCAPE_WUMPUS");
+
+    // TEST 6: Glow memory (no current glow) => GET_GOLD
+    ask t {
+        current_intention <- "I_PATROL"; intention_age <- 999;
+        perc_breeze <- false; perc_stench <- false; perc_glow <- false;
+        collect_persist <- 0; avoid_persist <- 0;
+
+        glow_mem_pos <- [{cx, cy}];
+        glow_mem_candidates <- [[{cx, cy}]];
+        glow_mem_step <- [0];
+
+        do update_desires_from_beliefs;
+        do select_intention;
+    }
+    do assert_true(t.current_intention = "I_GET_GOLD",
+        "Glow memory: current intention is I_GET_GOLD even without current perc_glow");
+
+    // TEST 7: Danger preempts gold immediately
+    ask t {
+        current_intention <- "I_GET_GOLD";
+        intention_age <- 0;
+
+        perc_breeze <- true; perc_stench <- false; perc_glow <- false;
+
+        do update_desires_from_beliefs;
+        do select_intention;
+    }
+    do assert_true(t.current_intention = "I_ESCAPE_PIT",
+        "Preemption: breeze interrupts I_GET_GOLD -> I_ESCAPE_PIT");
+
+    ask t { do die; }
+
+    int failed_now <- tests_failed - failed_before;
+    write "--------------------------------------------";
+    write ("UNIT TESTS FINISHED — new failures: " + string(failed_now));
+    write "--------------------------------------------";
+}
+
+
     
 	
 	
@@ -622,6 +773,7 @@ action run_bdi_desire_unit_tests {
         // ----- BDI Belief tests (Section 6) -----
         do run_bdi_belief_unit_tests;
         do run_bdi_desire_unit_tests;
+        do run_bdi_intention_unit_tests;
 
         if (tests_failed = 0) {
             write "All tests PASSED";
@@ -796,35 +948,45 @@ action run_bdi_desire_unit_tests {
     }
 
     // 10) Several steps in a row must always be neighbor moves (bounds-safe)
-    action test_player_multiple_steps_are_neighbors {
-        if (length(player) != 1) {
-            write "Test 10 (player multi-step neighbor): FAILED - no unique player to test";
-            tests_failed <- tests_failed + 1;
-            return;
-        }
+	action test_player_multiple_steps_are_neighbors {
+	    if (length(player) != 1) {
+	        write "Test 10 (player multi-step neighbor): FAILED - no unique player to test";
+	        tests_failed <- tests_failed + 1;
+	        return;
+	    }
+	
+	    player p <- one_of(player);
+	
+	    bool ok <- true;
+	
+	    loop i from: 1 to: 20 {
+	        gworld before <- p.current_cell;
+	
+	        ask p { do move_randomly_one_step; }
+	
+	        if (before = nil or p.current_cell = nil) { ok <- false; }
+	        else if (!(p.current_cell in before.neighbors)) { ok <- false; }
+	
+	        if (p.location != p.current_cell.location) { ok <- false; }
+	
+	        // Important: in random maps it is normal to sometimes die during a random walk.
+	        // This test is about "neighbor move correctness", not "survival".
+	        // If we die, respawn to keep testing additional neighbor moves.
+	        if (!p.alive) {
+	            ask p { do respawn; }
+	        }
+	    }
+	
+	    if ok {
+	        write "Test 10 (player multi-step neighbor): OK";
+	    } else {
+	        write "Test 10 (player multi-step neighbor): FAILED";
+	        tests_failed <- tests_failed + 1;
+	    }
+	
+	    ask p { do respawn; }
+	}
 
-        player p <- one_of(player);
-
-        bool ok <- true;
-
-        loop i from: 1 to: 20 {
-            gworld before <- p.current_cell;
-            ask p { do move_randomly_one_step; }
-
-            if (!(p.current_cell in before.neighbors)) { ok <- false; }
-            if (p.location != p.current_cell.location) { ok <- false; }
-            if (!p.alive) { ok <- false; } // in normal test run, we don't want to die here
-        }
-
-        if ok {
-            write "Test 10 (player multi-step neighbor): OK";
-        } else {
-            write "Test 10 (player multi-step neighbor): FAILED";
-            tests_failed <- tests_failed + 1;
-        }
-
-        ask p { do respawn; }
-    }
 
     // 11) Moving onto the Wumpus cell must mark the player as dead
     action test_player_death_detection {
@@ -1635,6 +1797,10 @@ action select_and_update_intention {
     } else {
         intention_age <- intention_age + 1;
     }
+}
+
+action select_intention {
+    do select_and_update_intention;
 }
 
 action plan_escape_pit_one_step {
