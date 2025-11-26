@@ -1359,7 +1359,7 @@ action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
 	// ======================================================
 // SECTION 7: DESIRES (activation, persistence, priority)
 // ======================================================
-int RISK_THRESHOLD <- 1;              // evidence count >= 2 => "too risky"
+int RISK_THRESHOLD <- 2;              // evidence count >= 2 => "too risky"
 int COLLECT_PERSIST_TICKS <- 3;       // keep collect desire active for a few ticks
 int AVOID_PERSIST_TICKS   <- 1;       // keep avoid desire active for at least 1 extra tick
 
@@ -1481,53 +1481,37 @@ action select_patrol_next_cell {
 
     list<gworld> safe_not_recent <- [];
     list<gworld> safe_any <- [];
-    list<gworld> acceptable <- [];
 
     loop c over: neigh {
-
         point p <- { int(c.grid_x), int(c.grid_y) };
 
-        int pit_cnt <- length(pit_evidence where (each = p));
-        int w_cnt   <- length(wumpus_evidence where (each = p));
+        // "forbidden" is ONLY for unknown/suspected cells; never block a known-safe cell
+        bool is_forbidden <- (forbidden_cells contains p) and !(known_safe contains p);
 
-        bool forbidden <- (forbidden_cells contains p);
-        bool too_risky <- forbidden or (pit_cnt >= RISK_THRESHOLD) or (w_cnt >= RISK_THRESHOLD);
-
-        if (!too_risky) {
-            acceptable <- acceptable + [c];
-        }
-
-        if ((known_safe contains p) and !too_risky) {
+        if ((known_safe contains p) and !is_forbidden) {
             safe_any <- safe_any + [c];
-            if (!(recent_positions contains p)) {
-                safe_not_recent <- safe_not_recent + [c];
-            }
+            if (!(recent_positions contains p)) { safe_not_recent <- safe_not_recent + [c]; }
         }
     }
 
-    if (in_2cycle and last_cell != nil and length(neigh) > 1) {
+    // Anti A<->B oscillation only when we have alternatives
+    if (in_2cycle and last_cell != nil and length(safe_any) > 1) {
+        safe_any <- safe_any where (each != last_cell);
         safe_not_recent <- safe_not_recent where (each != last_cell);
-        safe_any        <- safe_any        where (each != last_cell);
-        acceptable      <- acceptable      where (each != last_cell);
     } else if (last_cell != nil) {
+        if (length(safe_any) > 1) { safe_any <- safe_any where (each != last_cell); }
         if (length(safe_not_recent) > 1) { safe_not_recent <- safe_not_recent where (each != last_cell); }
-        if (length(safe_any) > 1)        { safe_any        <- safe_any        where (each != last_cell); }
-        if (length(acceptable) > 1)      { acceptable      <- acceptable      where (each != last_cell); }
     }
 
     if (length(safe_not_recent) > 0) { patrol_next_cell <- one_of(safe_not_recent); return; }
     if (length(safe_any) > 0)        { patrol_next_cell <- one_of(safe_any);        return; }
-    if (length(acceptable) > 0)      { patrol_next_cell <- one_of(acceptable);      return; }
 
-    // If EVERYTHING is suspicious/forbidden, do NOT guess: backtrack to a proven-safe last_cell if possible.
-    if (last_cell != nil) {
+    // Hard fallback: backtrack to last_cell if it is known safe (even if it was previously "forbidden")
+    if (last_cell != nil and (last_cell in neigh)) {
         point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
-        if ((known_safe contains back_p) and !(forbidden_cells contains back_p)) {
-            patrol_next_cell <- last_cell;
-        }
+        if (known_safe contains back_p) { patrol_next_cell <- last_cell; }
     }
 }
-
 
 
 
@@ -1537,16 +1521,21 @@ action move_to_cell (gworld dest) {
     if (current_cell = nil) { return; }
     if (dest = nil) { return; }
 
-    // HARD SAFETY GATE: never enter a suspected hazard cell unless it is proven safe
     point dest_p <- { int(dest.grid_x), int(dest.grid_y) };
+
+    // STRICT SAFETY: never enter an UNKNOWN cell if we have ANY pit/wumpus evidence on it
+    bool is_unknown_cell <- !(known_safe contains dest_p);
+    bool is_gold_cell <- dest.has_gold;
+
     int pit_cnt <- length(pit_evidence where (each = dest_p));
     int w_cnt   <- length(wumpus_evidence where (each = dest_p));
 
-    bool suspected <- (!(known_safe contains dest_p)) and ((pit_cnt >= RISK_THRESHOLD) or (w_cnt >= RISK_THRESHOLD));
-    if (suspected) {
+    bool blocked <- (is_unknown_cell and !is_gold_cell) and ((pit_cnt > 0) or (w_cnt > 0));
+
+    if (blocked) {
         do add_forbidden_cell(dest_p);
         if (debug_player) {
-            write "BLOCKED MOVE to " + dest.location + " (suspected hazard: pit_cnt=" + string(pit_cnt) + ", w_cnt=" + string(w_cnt) + ")";
+            write "BLOCKED MOVE to " + dest.location + " (unknown + evidence: pit=" + string(pit_cnt) + ", wumpus=" + string(w_cnt) + ")";
         }
         return;
     }
@@ -1577,10 +1566,9 @@ action move_to_cell (gworld dest) {
     }
 
     do check_lethal_cell;
-    if (alive) {
-        do collect_gold_if_present;
-    }
+    if (alive) { do collect_gold_if_present; }
 }
+
 
 
 
@@ -1596,7 +1584,6 @@ action move_collect_gold_one_step {
 
     if (current_cell = nil) { return; }
 
-    // Detect a 2-cycle pattern in the last 3 visited positions: A-B-A
     bool in_2cycle <- false;
     if (length(recent_positions) >= 3) {
         list<point> tail3 <- last(3, recent_positions);
@@ -1604,7 +1591,6 @@ action move_collect_gold_one_step {
     }
 
     list<point> targets <- [];
-
     if (perc_glow) {
         targets <- cand_gold;
     } else if (length(glow_mem_candidates) > 0) {
@@ -1613,43 +1599,36 @@ action move_collect_gold_one_step {
 
     list<gworld> neigh <- current_cell.neighbors;
 
-    list<gworld> preferred <- [];
+    list<gworld> preferred_safe <- [];
+
     loop c over: neigh {
         point p <- { int(c.grid_x), int(c.grid_y) };
-        if ((targets contains p) and !(forbidden_cells contains p)) {
-            preferred <- preferred + [c];
-        }
-    }
 
-    list<gworld> preferred_safe <- [];
-    loop c over: preferred {
-        point p <- { int(c.grid_x), int(c.grid_y) };
-        int pit_cnt <- length(pit_evidence where (each = p));
-        int w_cnt   <- length(wumpus_evidence where (each = p));
-        if (pit_cnt < RISK_THRESHOLD and w_cnt < RISK_THRESHOLD) {
+        bool target_ok <- (targets contains p) or c.has_gold;
+        bool safe_ok   <- (known_safe contains p) or c.has_gold;
+
+        // forbidden only applies to unknown/suspected cells
+        bool is_forbidden <- (forbidden_cells contains p) and !(known_safe contains p);
+
+        if (target_ok and safe_ok and !is_forbidden) {
             preferred_safe <- preferred_safe + [c];
         }
     }
 
-    // Strong anti-oscillation for 2-cycles (A<->B):
-    // if we'd go back to last_cell as the only option, force a patrol step instead.
-    if (in_2cycle and last_cell != nil and length(neigh) > 1) {
-        if (length(preferred_safe) > 1) {
-            preferred_safe <- preferred_safe where (each != last_cell);
-        } else if (length(preferred_safe) = 1 and preferred_safe[0] = last_cell) {
-            preferred_safe <- [];
-        }
+    if (in_2cycle and last_cell != nil and length(preferred_safe) > 1) {
+        preferred_safe <- preferred_safe where (each != last_cell);
     } else if (last_cell != nil and length(preferred_safe) > 1) {
-        // Normal anti-oscillation when multiple good choices
         preferred_safe <- preferred_safe where (each != last_cell);
     }
 
     if (length(preferred_safe) > 0) {
         do move_to_cell(one_of(preferred_safe));
-    } else {
-        do move_patrol_safe_one_step;
+        return;
     }
+
+    do move_patrol_safe_one_step;
 }
+
 
 
 // Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
@@ -1846,14 +1825,10 @@ action plan_escape_pit_one_step {
 
     if (current_cell = nil) { return; }
 
-    // Mark the cell we are escaping from to discourage re-entry
-    point bad <- { int(current_cell.grid_x), int(current_cell.grid_y) };
-    do add_forbidden_cell(bad);
-
-    // Reactive "undo last movement" ONLY if it does not create a forbidden 2-cycle
+    // Always backtrack to known-safe last_cell (even if it was previously "forbidden")
     if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
         point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
-        if (!(forbidden_cells contains back_p)) {
+        if (known_safe contains back_p) {
             do move_to_cell(last_cell);
             return;
         }
@@ -1861,18 +1836,16 @@ action plan_escape_pit_one_step {
 
     do move_patrol_safe_one_step;
 }
+
 
 action plan_escape_wumpus_one_step {
 
     if (current_cell = nil) { return; }
 
-    point bad <- { int(current_cell.grid_x), int(current_cell.grid_y) };
-    do add_forbidden_cell(bad);
-
-    // Reactive "undo last movement" ONLY if it does not create a forbidden 2-cycle
+    // Always backtrack to known-safe last_cell (even if it was previously "forbidden")
     if (last_cell != nil and (last_cell in current_cell.neighbors) and (last_cell != current_cell)) {
         point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
-        if (!(forbidden_cells contains back_p)) {
+        if (known_safe contains back_p) {
             do move_to_cell(last_cell);
             return;
         }
@@ -1880,6 +1853,110 @@ action plan_escape_wumpus_one_step {
 
     do move_patrol_safe_one_step;
 }
+
+action move_to_cell_forced (gworld dest) {
+
+    if (!alive) { return; }
+    if (current_cell = nil) { return; }
+    if (dest = nil) { return; }
+
+    gworld from <- current_cell;
+
+    prev_pos <- location;
+
+    int dx <- int(dest.grid_x) - int(from.grid_x);
+    int dy <- int(dest.grid_y) - int(from.grid_y);
+
+    if (dx = 1) { last_move <- "E"; }
+    else if (dx = -1) { last_move <- "W"; }
+    else if (dy = 1) { last_move <- "S"; }
+    else if (dy = -1) { last_move <- "N"; }
+    else { last_move <- "none"; }
+
+    last_cell <- from;
+    current_cell <- dest;
+
+    do goto target: dest.location;
+    location <- dest.location;
+
+    steps <- steps + 1;
+
+    if (debug_player) {
+        write "FORCED Player step " + steps + " -> " + location + " | intention=" + current_intention;
+    }
+
+    do check_lethal_cell;
+    if (alive) { do collect_gold_if_present; }
+}
+
+
+action emergency_move_one_step {
+
+    if (!alive) { return; }
+    if (current_cell = nil) { return; }
+
+    list<gworld> neigh <- current_cell.neighbors;
+    if (length(neigh) = 0) { return; }
+
+    // 1) Backtrack if possible (preferred)
+    if (last_cell != nil and (last_cell in neigh) and (last_cell != current_cell)) {
+        point back_p <- { int(last_cell.grid_x), int(last_cell.grid_y) };
+        if (known_safe contains back_p) {
+            do move_to_cell(last_cell);
+            return;
+        }
+    }
+
+    // 2) Any known-safe neighbor (ignoring forbidden here)
+    list<gworld> safe_neigh <- [];
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        if (known_safe contains p and c != current_cell) { safe_neigh <- safe_neigh + [c]; }
+    }
+    if (length(safe_neigh) > 0) {
+        do move_to_cell(one_of(safe_neigh));
+        return;
+    }
+
+    // 3) Neighbor with zero evidence (safe-ish exploration)
+    list<gworld> no_evidence <- [];
+    loop c over: neigh {
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        int pit_cnt <- length(pit_evidence where (each = p));
+        int w_cnt   <- length(wumpus_evidence where (each = p));
+        if (pit_cnt = 0 and w_cnt = 0 and c != current_cell) { no_evidence <- no_evidence + [c]; }
+    }
+    if (length(no_evidence) > 0) {
+        do move_to_cell(one_of(no_evidence));
+        return;
+    }
+
+    // 4) LAST RESORT (fix for "stuck on breeze/stench"): forced move to the least-risk neighbor
+    int best_score <- 999999;
+    list<gworld> best <- [];
+
+    loop c over: neigh {
+        if (c = current_cell) { continue; }
+
+        point p <- { int(c.grid_x), int(c.grid_y) };
+        int pit_cnt <- length(pit_evidence where (each = p));
+        int w_cnt   <- length(wumpus_evidence where (each = p));
+
+        int score <- pit_cnt + w_cnt;
+
+        if (score < best_score) {
+            best_score <- score;
+            best <- [c];
+        } else if (score = best_score) {
+            best <- best + [c];
+        }
+    }
+
+    if (length(best) > 0) {
+        do move_to_cell_forced(one_of(best));
+    }
+}
+
 
 action execute_current_intention_one_step {
 
@@ -1912,11 +1989,20 @@ if (current_intention = I_ESCAPE_PIT) {
 }
 
 action bdi_cycle_step {
+
+    gworld before_cell <- current_cell;
+
     do perceive_and_revise_beliefs;
     do update_desires_from_beliefs;
     do select_and_update_intention;
     do execute_current_intention_one_step;
+
+    // If we didn't move (typically because a move was blocked), force a safe move.
+    if (alive and before_cell != nil and current_cell = before_cell) {
+        do emergency_move_one_step;
+    }
 }
+
     
 
     // One reflex does both: perceive first, then move
@@ -1936,7 +2022,19 @@ init {
 // SECTION 7: Plans per intention (priority handled by desire strengths)
 // Each plan: perceive -> revise beliefs -> update desires -> act
 // ------------------------------
-plan bdi_cycle intention: wants_patrol {
+plan bdi_cycle_patrol intention: wants_patrol {
+    if (alive and (not is_tester)) {
+        do bdi_cycle_step;
+    }
+}
+
+plan bdi_cycle_collect intention: wants_collect_gold {
+    if (alive and (not is_tester)) {
+        do bdi_cycle_step;
+    }
+}
+
+plan bdi_cycle_avoid intention: wants_avoid_wumpus {
     if (alive and (not is_tester)) {
         do bdi_cycle_step;
     }
