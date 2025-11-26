@@ -2272,48 +2272,79 @@ display view1 {
     species player      aspect: base;
 
     // --- END SCREENS (Victory / Game Over) ---
-    graphics "end_screen_bg" transparency: 0.45 {
-        if (game_finished) {
-            float s <- max(grid_width, grid_height) * 20.0;
-            draw square(s) at: {grid_width / 2.0, grid_height / 2.0} color: #black border: #black;
-        }
+graphics "end_screen_bg" position:{0,0} size:{1,1} transparency: 0.55 {
+    if (game_finished) {
+        // Full-screen overlay, always centered on the camera
+        draw rectangle(#display_width, #display_height) at: #camera_target color: #gray border: #gray;
     }
+}
 
-    graphics "end_screen_text" {
-        if (game_finished) {
+graphics "end_screen_text" position:{0,0} size:{1,1} {
 
-            float lx <- grid_width * 0.15;
-            float base_y <- grid_height * 0.80;
-            float gap <- max(1.0, grid_height * 0.08);
+    if (game_finished) {
 
-            rgb title_col <- (end_outcome = "VICTORY") ? #chartreuse : #red;
+        point c <- #camera_target;
 
-            draw end_outcome at: {lx, base_y} size: 48 color: title_col;
+        // Responsive panel in pixels, clamped to a fraction of the current display
+        float panel_w <- ((#display_width  * 0.80) < (640#px)) ? (#display_width  * 0.80) : (640#px);
+        float panel_h <- ((#display_height * 0.70) < (440#px)) ? (#display_height * 0.70) : (440#px);
 
-            draw ("Gold: " + string(end_gold_collected) + " / " + string(end_gold_total))
-                at: {lx, base_y - 1 * gap} size: 24 color: #white;
+        float pad  <- 24#px;
+        float line <- 34#px;
 
-            draw ("Steps: " + string(end_steps) + " | Cycle: " + string(end_cycle))
-                at: {lx, base_y - 2 * gap} size: 24 color: #white;
+        // Card panel (centered)
+        draw rectangle(panel_w, panel_h) at: c color: #black border: #white;
 
-            draw ("Final cell: " + string(end_cell) + " | Final intention: " + end_intention)
-                at: {lx, base_y - 3 * gap} size: 22 color: #white;
+        // Fonts
+        font f_title <- font("Helvetica", 44, #bold);
+        font f_line  <- font("Helvetica", 22, #plain);
+        font f_small <- font("Helvetica", 18, #plain);
 
-            if (end_outcome = "GAME OVER") {
-                draw ("Cause: " + end_reason)
-                    at: {lx, base_y - 4 * gap} size: 22 color: #white;
-            }
+        rgb title_col <- (end_outcome = "VICTORY") ? #chartreuse : #red;
 
-            draw ("Known-safe cells: " + string(end_known_safe) + " | Forbidden: " + string(end_forbidden))
-                at: {lx, base_y - 5 * gap} size: 20 color: #white;
+        // Layout anchors (pixel-based spacing)
+        float x <- c.x - panel_w / 2 + pad;
+        float y <- c.y + panel_h / 2 - pad;
 
-            draw ("Evidence (pit / wumpus): " + string(end_pit_evidence) + " / " + string(end_wumpus_evidence))
-                at: {lx, base_y - 6 * gap} size: 20 color: #white;
+        // Title (centered)
+        draw end_outcome at: {c.x, y} anchor: #top_center font: f_title color: title_col border: #black;
+        y <- y - 66#px;
 
-            draw ("Simulation paused. Use 'Reload experiment' to restart.")
-                at: {lx, base_y - 7 * gap} size: 18 color: #white;
+        // Body (left-aligned)
+        draw ("Gold: " + string(end_gold_collected) + " / " + string(end_gold_total))
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        draw ("Steps: " + string(end_steps) + "   |   Cycle: " + string(end_cycle))
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        draw ("Final cell: " + string(end_cell))
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        draw ("Final intention: " + end_intention)
+            at: {x, y} anchor: #top_left font: f_line color: #white;
+        y <- y - line;
+
+        if (end_outcome = "GAME OVER") {
+            draw ("Cause: " + end_reason)
+                at: {x, y} anchor: #top_left font: f_line color: #white;
+            y <- y - line;
         }
+
+        draw ("Known-safe cells: " + string(end_known_safe) + "   |   Forbidden: " + string(end_forbidden))
+            at: {x, y} anchor: #top_left font: f_small color: #white;
+        y <- y - 28#px;
+
+        draw ("Evidence (pit / wumpus): " + string(end_pit_evidence) + " / " + string(end_wumpus_evidence))
+            at: {x, y} anchor: #top_left font: f_small color: #white;
+
+        // Footer (bottom centered inside the panel)
+        draw ("Simulation paused — use 'Reload experiment' to restart.")
+            at: {c.x, c.y - panel_h / 2 + pad} anchor: #bottom_center font: f_small color: #white;
     }
+}
 }
 
         monitor "Tests executed"          value: tests_executed;
