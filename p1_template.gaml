@@ -284,11 +284,19 @@ global {
         int failed_before <- tests_failed;
 
         // Create a dedicated tester agent (won't walk randomly)
-        create player number: 1 {
-            is_tester <- true;
-            alive <- true;
-            location <- {5,5};   // assumes grid >= 6x6 (default 10x10 is OK)
-        }
+		create player number: 1 {
+		    is_tester <- true;
+		    alive <- true;
+		
+		    spawn_cell   <- gworld grid_at {5,5};
+		    current_cell <- spawn_cell;
+		    last_cell    <- spawn_cell;
+		
+		    if (current_cell != nil) {
+		        location <- current_cell.location;
+		    }
+		}
+
 
         player t <- one_of(player where each.is_tester);
 
@@ -333,10 +341,13 @@ global {
         // -----------------------
         list<point> neigh <- [{4,5},{6,5},{5,4},{5,6}];
 
-        ask t {
-            location <- {5,5};
-            do update_beliefs_from_percepts(true, false, false);
-        }
+		ask t {
+		    gworld c <- gworld grid_at {5,5};
+		    current_cell <- c;
+		    location <- c.location;
+		    do update_beliefs_from_percepts(true, false, false);
+		}
+
 
         loop p over: neigh {
             do assert_true(length(t.pit_evidence where (each = p)) = 1,
@@ -361,16 +372,19 @@ global {
         // -----------------------
         // TEST 3: glow memory bounded to MAX_GLOW_MEMORY
         // -----------------------
-        ask t {
-            location <- {2,2};
-            do update_beliefs_from_percepts(false, false, true);
-
-            location <- {3,3};
-            do update_beliefs_from_percepts(false, false, true);
-
-            location <- {4,4};
-            do update_beliefs_from_percepts(false, false, true);
-        }
+		ask t {
+		    gworld c1 <- gworld grid_at {2,2};
+		    current_cell <- c1; location <- c1.location;
+		    do update_beliefs_from_percepts(false, false, true);
+		
+		    gworld c2 <- gworld grid_at {3,3};
+		    current_cell <- c2; location <- c2.location;
+		    do update_beliefs_from_percepts(false, false, true);
+		
+		    gworld c3 <- gworld grid_at {4,4};
+		    current_cell <- c3; location <- c3.location;
+		    do update_beliefs_from_percepts(false, false, true);
+		}
 
         do assert_true(length(t.glow_mem_pos) = 2, "glow_mem_pos is bounded to MAX_GLOW_MEMORY");
         do assert_true(t.glow_mem_pos[0] = {3,3} and t.glow_mem_pos[1] = {4,4},
@@ -883,90 +897,97 @@ species player skills: [moving] control: simple_bdi {
     // ======================================================
     action update_beliefs_from_percepts (bool breeze, bool stench, bool glow) {
 
-        belief_step <- belief_step + 1;
+    belief_step <- belief_step + 1;
 
-        // memory of visited cells
-        recent_positions <- recent_positions + [location];
+    // IMPORTANT: beliefs are stored in GRID COORDINATES (grid_x, grid_y),
+    // not in world coordinates like {65,25,0}.
+    if (current_cell = nil) { return; }
 
-        // neighbor candidates
-        do compute_neighbors4(location);
-        list<point> neigh <- neighbors4_tmp;
+    point here <- { int(current_cell.grid_x), int(current_cell.grid_y) };
 
-        // reset candidates
-        cand_pit <- [];
-        cand_wumpus <- [];
-        cand_gold <- [];
+    // memory of visited cells (grid coords)
+    recent_positions <- recent_positions + [here];
 
-        // (A) Breeze -> pit evidence
-        if (breeze) {
-            cand_pit <- neigh;
-            loop p over: neigh {
-                if (!(known_safe contains p)) {
-                    pit_evidence <- pit_evidence + [p];
-                }
-            }
-        } else {
-            // no breeze => neighbors cannot contain pits
-            loop p over: neigh {
-                pit_evidence <- pit_evidence where (each != p);
-            }
-        }
+    // neighbor candidates (grid coords)
+    do compute_neighbors4(here);
+    list<point> neigh <- neighbors4_tmp;
 
-        // (B) Stench -> wumpus evidence
-        if (stench) {
-            cand_wumpus <- neigh;
-            loop p over: neigh {
-                if (!(known_safe contains p)) {
-                    wumpus_evidence <- wumpus_evidence + [p];
-                }
-            }
-        } else {
-            // no stench => neighbors cannot contain the Wumpus
-            loop p over: neigh {
-                wumpus_evidence <- wumpus_evidence where (each != p);
+    // reset candidates
+    cand_pit <- [];
+    cand_wumpus <- [];
+    cand_gold <- [];
+
+    // (A) Breeze -> pit evidence
+    if (breeze) {
+        cand_pit <- neigh;
+        loop p over: neigh {
+            if (!(known_safe contains p)) {
+                pit_evidence <- pit_evidence + [p];
             }
         }
-
-        // (C) Safe cells only if BOTH no breeze and no stench
-        if (!breeze and !stench) {
-            loop p over: neigh {
-                if (!(known_safe contains p)) { known_safe <- known_safe + [p]; }
-            }
+    } else {
+        // no breeze => neighbors cannot contain pits
+        loop p over: neigh {
+            pit_evidence <- pit_evidence where (each != p);
         }
-
-        // (D) Glow -> bounded glow memory
-        if (glow) {
-            cand_gold <- neigh;
-            glow_mem_pos        <- glow_mem_pos + [location];
-            glow_mem_candidates <- glow_mem_candidates + [neigh];
-            glow_mem_step       <- glow_mem_step + [belief_step];
-        }
-
-        // (E) risk metrics (max evidence count among candidates)
-        risk_pit <- 0;
-        if (breeze) {
-            loop p over: cand_pit {
-                do count_in_list(pit_evidence, p);
-                if (tmp_count > risk_pit) { risk_pit <- tmp_count; }
-            }
-        }
-
-        risk_wumpus <- 0;
-        if (stench) {
-            loop p over: cand_wumpus {
-                do count_in_list(wumpus_evidence, p);
-                if (tmp_count > risk_wumpus) { risk_wumpus <- tmp_count; }
-            }
-        }
-
-        // (F) enforce bounded memory
-        do enforce_memory_bounds;
-
-        // (G) transient predicates in belief_base
-        do set_transient_belief(near_pit, breeze);
-        do set_transient_belief(near_wumpus, stench);
-        do set_transient_belief(near_gold, glow);
     }
+
+    // (B) Stench -> wumpus evidence
+    if (stench) {
+        cand_wumpus <- neigh;
+        loop p over: neigh {
+            if (!(known_safe contains p)) {
+                wumpus_evidence <- wumpus_evidence + [p];
+            }
+        }
+    } else {
+        // no stench => neighbors cannot contain the Wumpus
+        loop p over: neigh {
+            wumpus_evidence <- wumpus_evidence where (each != p);
+        }
+    }
+
+    // (C) Safe cells only if BOTH no breeze and no stench
+    if (!breeze and !stench) {
+        loop p over: neigh {
+            if (!(known_safe contains p)) { known_safe <- known_safe + [p]; }
+        }
+    }
+
+    // (D) Glow -> bounded glow memory (store GRID coords + GRID neighbor coords)
+    if (glow) {
+        cand_gold <- neigh;
+        glow_mem_pos        <- glow_mem_pos + [here];
+        glow_mem_candidates <- glow_mem_candidates + [neigh];
+        glow_mem_step       <- glow_mem_step + [belief_step];
+    }
+
+    // (E) risk metrics (max evidence count among candidates)
+    risk_pit <- 0;
+    if (breeze) {
+        loop p over: cand_pit {
+            do count_in_list(pit_evidence, p);
+            if (tmp_count > risk_pit) { risk_pit <- tmp_count; }
+        }
+    }
+
+    risk_wumpus <- 0;
+    if (stench) {
+        loop p over: cand_wumpus {
+            do count_in_list(wumpus_evidence, p);
+            if (tmp_count > risk_wumpus) { risk_wumpus <- tmp_count; }
+        }
+    }
+
+    // (F) enforce bounded memory
+    do enforce_memory_bounds;
+
+    // (G) transient predicates in belief_base
+    do set_transient_belief(near_pit, breeze);
+    do set_transient_belief(near_wumpus, stench);
+    do set_transient_belief(near_gold, glow);
+}
+
 
     // ======================================================
     // SECTION 6 REQUIRED: perception handling via `perceive`
