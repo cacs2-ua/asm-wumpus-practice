@@ -1473,6 +1473,13 @@ action select_patrol_next_cell {
     list<gworld> neigh <- current_cell.neighbors;
     if (length(neigh) = 0) { return; }
 
+    // Detect a 2-cycle pattern in the last 3 visited positions: A-B-A
+    bool in_2cycle <- false;
+    if (length(recent_positions) >= 3) {
+        list<point> tail3 <- last(3, recent_positions);
+        if (length(tail3) = 3 and tail3[0] = tail3[2]) { in_2cycle <- true; }
+    }
+
     list<gworld> safe_not_recent <- [];
     list<gworld> safe_any <- [];
     list<gworld> acceptable <- [];
@@ -1499,8 +1506,14 @@ action select_patrol_next_cell {
         }
     }
 
-    // Anti-oscillation: if there are multiple choices, do not immediately go back to last_cell
-    if (last_cell != nil) {
+    // Break infinite A<->B oscillation:
+    // if we detect a 2-cycle and there is more than one neighbor, do NOT go back to last_cell.
+    if (in_2cycle and last_cell != nil and length(neigh) > 1) {
+        safe_not_recent <- safe_not_recent where (each != last_cell);
+        safe_any        <- safe_any        where (each != last_cell);
+        acceptable      <- acceptable      where (each != last_cell);
+    } else if (last_cell != nil) {
+        // Normal anti-oscillation: avoid immediate backtrack only when there are multiple choices
         if (length(safe_not_recent) > 1) { safe_not_recent <- safe_not_recent where (each != last_cell); }
         if (length(safe_any) > 1)        { safe_any        <- safe_any        where (each != last_cell); }
         if (length(acceptable) > 1)      { acceptable      <- acceptable      where (each != last_cell); }
@@ -1521,11 +1534,18 @@ action select_patrol_next_cell {
         return;
     }
 
-    // Fallback: all risky/forbidden => choose least risky (strongly penalize forbidden)
-    gworld best <- neigh[0];
+    // Fallback: all risky/forbidden => choose least risky,
+    // but if we are in a 2-cycle, evaluate candidates excluding last_cell (when possible).
+    list<gworld> pool <- neigh;
+    if (in_2cycle and last_cell != nil and length(neigh) > 1) {
+        pool <- neigh where (each != last_cell);
+        if (length(pool) = 0) { pool <- neigh; }
+    }
+
+    gworld best <- pool[0];
     int best_score <- 999999;
 
-    loop c over: neigh {
+    loop c over: pool {
         point p <- { int(c.grid_x), int(c.grid_y) };
         int pit_cnt <- length(pit_evidence where (each = p));
         int w_cnt   <- length(wumpus_evidence where (each = p));
@@ -1593,6 +1613,13 @@ action move_collect_gold_one_step {
 
     if (current_cell = nil) { return; }
 
+    // Detect a 2-cycle pattern in the last 3 visited positions: A-B-A
+    bool in_2cycle <- false;
+    if (length(recent_positions) >= 3) {
+        list<point> tail3 <- last(3, recent_positions);
+        if (length(tail3) = 3 and tail3[0] = tail3[2]) { in_2cycle <- true; }
+    }
+
     list<point> targets <- [];
 
     if (perc_glow) {
@@ -1621,8 +1648,16 @@ action move_collect_gold_one_step {
         }
     }
 
-    // Anti-oscillation: if there are multiple equally good choices, avoid immediate backtrack
-    if (last_cell != nil and length(preferred_safe) > 1) {
+    // Strong anti-oscillation for 2-cycles (A<->B):
+    // if we'd go back to last_cell as the only option, force a patrol step instead.
+    if (in_2cycle and last_cell != nil and length(neigh) > 1) {
+        if (length(preferred_safe) > 1) {
+            preferred_safe <- preferred_safe where (each != last_cell);
+        } else if (length(preferred_safe) = 1 and preferred_safe[0] = last_cell) {
+            preferred_safe <- [];
+        }
+    } else if (last_cell != nil and length(preferred_safe) > 1) {
+        // Normal anti-oscillation when multiple good choices
         preferred_safe <- preferred_safe where (each != last_cell);
     }
 
@@ -1632,7 +1667,6 @@ action move_collect_gold_one_step {
         do move_patrol_safe_one_step;
     }
 }
-
 
 
 // Minimal “avoid” behavior for Section 7 (reactive backtrack; refined in Section 8)
